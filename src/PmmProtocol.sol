@@ -251,7 +251,22 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
         // Maker => Taker
         address receiver = needUnwrap ? address(this) : target;
         if (order.usePermit2) {
-            IERC20(order.makerAsset).safeTransferFromPermit2(maker, receiver, makerAmount);
+            if (order.permit2Signature.length > 0) {
+                // permit2 signature based transfer
+                IPermit2.PermitTransferFrom memory permitTransferFrom = IPermit2.PermitTransferFrom({
+                    permitted: IPermit2.TokenPermissions({token: order.makerAsset, amount: makerAmount}),
+                    nonce: order.rfqId,
+                    deadline: order.expiry
+                });
+                IPermit2.SignatureTransferDetails memory signatureTransferDetails =
+                    IPermit2.SignatureTransferDetails({to: receiver, requestedAmount: makerAmount});
+                IPermit2(SafeERC20._PERMIT2).permitTransferFrom(
+                    permitTransferFrom, signatureTransferDetails, maker, order.permit2Signature
+                );
+            } else {
+                // permit2 allowance based transfer
+                IERC20(order.makerAsset).safeTransferFromPermit2(maker, receiver, makerAmount);
+            }
         } else {
             IERC20(order.makerAsset).safeTransferFrom(maker, receiver, makerAmount);
         }

@@ -16,4 +16,3 @@ library Errors {
     error RFQ_SettlementAmountTooSmall(uint256 rfqId);
     error RFQ_OrderAlreadyCancelledOrUsed(uint256 rfqId);
 }
-

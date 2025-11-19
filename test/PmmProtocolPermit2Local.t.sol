@@ -2,7 +2,7 @@
 pragma solidity 0.8.17;
 
 import "forge-std/Test.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "../src/interfaces/IERC20.sol";
 import "../src/PmmProtocol.sol";
 import "../src/OrderRFQLib.sol";
 import "../src/interfaces/IWETH.sol";
