@@ -254,7 +254,7 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
             if (order.permit2Signature.length > 0) {
                 // permit2 signature based transfer
                 IPermit2.PermitTransferFrom memory permitTransferFrom = IPermit2.PermitTransferFrom({
-                    permitted: IPermit2.TokenPermissions({token: order.makerAsset, amount: makerAmount}),
+                    permitted: IPermit2.TokenPermissions({token: order.makerAsset, amount: order.makerAmount}),
                     nonce: order.rfqId,
                     deadline: order.expiry
                 });
