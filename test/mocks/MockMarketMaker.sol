@@ -39,7 +39,9 @@ contract MockMarketMaker is Test {
             makerAmount: amount,
             takerAmount: amount,
             usePermit2: true,
-            permit2Signature: ""
+            permit2Signature: "",
+            permit2Witness: bytes32(0),
+            permit2WitnessType: ""
         });
 
         // Return empty signature and signature type for now

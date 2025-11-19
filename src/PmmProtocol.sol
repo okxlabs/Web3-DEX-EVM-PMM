@@ -260,9 +260,21 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
                 });
                 IPermit2.SignatureTransferDetails memory signatureTransferDetails =
                     IPermit2.SignatureTransferDetails({to: receiver, requestedAmount: makerAmount});
-                IPermit2(SafeERC20._PERMIT2).permitTransferFrom(
-                    permitTransferFrom, signatureTransferDetails, maker, order.permit2Signature
-                );
+                
+                if (bytes(order.permit2WitnessType).length > 0) {
+                    IPermit2(SafeERC20._PERMIT2).permitWitnessTransferFrom(
+                        permitTransferFrom,
+                        signatureTransferDetails,
+                        maker,
+                        order.permit2Witness,
+                        order.permit2WitnessType,
+                        order.permit2Signature
+                    );
+                } else {
+                    IPermit2(SafeERC20._PERMIT2).permitTransferFrom(
+                        permitTransferFrom, signatureTransferDetails, maker, order.permit2Signature
+                    );
+                }
             } else {
                 // permit2 allowance based transfer
                 IERC20(order.makerAsset).safeTransferFromPermit2(maker, receiver, makerAmount);

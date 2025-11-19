@@ -15,6 +15,8 @@ library OrderRFQLib {
         uint256 takerAmount; // 0xc0
         bool usePermit2; // 0xe0;
         bytes permit2Signature; // 0xf0;
+        bytes32 permit2Witness;
+        string permit2WitnessType;
     }
     // forgefmt: disable-start
     bytes32 internal constant _LIMIT_ORDER_RFQ_TYPEHASH =
@@ -27,8 +29,10 @@ library OrderRFQLib {
             "address makerAddress,"
             "uint256 makerAmount,"
             "uint256 takerAmount,"
-            "bool usePermit2"
-            "bytes permit2Signature"
+            "bool usePermit2,"
+            "bytes permit2Signature,"
+            "bytes32 permit2Witness,"
+            "string permit2WitnessType"
             ")"
         );
     // forgefmt: disable-end
@@ -47,7 +51,9 @@ library OrderRFQLib {
                 order.makerAmount,
                 order.takerAmount,
                 order.usePermit2,
-                keccak256(order.permit2Signature)
+                keccak256(order.permit2Signature),
+                order.permit2Witness,
+                keccak256(bytes(order.permit2WitnessType))
             )
         );
         return ECDSA.toTypedDataHash(domainSeparator, structHash);

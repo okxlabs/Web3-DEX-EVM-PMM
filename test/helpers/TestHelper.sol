@@ -46,7 +46,9 @@ contract TestHelper is Test {
             makerAmount: makerAmount,
             takerAmount: takerAmount,
             usePermit2: usePermit2,
-            permit2Signature: ""
+            permit2Signature: "",
+            permit2Witness: bytes32(0),
+            permit2WitnessType: ""
         });
     }
 

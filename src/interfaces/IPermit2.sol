@@ -73,6 +73,15 @@ interface IPermit2 {
         bytes calldata signature
     ) external;
 
+    function permitWitnessTransferFrom(
+        PermitTransferFrom memory permit,
+        SignatureTransferDetails calldata transferDetails,
+        address owner,
+        bytes32 witness,
+        string calldata witnessTypeString,
+        bytes calldata signature
+    ) external;
+
     function allowance(address user, address token, address spender) external view returns (PackedAllowance memory);
 
     /// @notice Approves the spender to use up to amount of the specified token up until the expiration
