@@ -9,7 +9,7 @@ contract ERC20 {
     string private _name;
     string private _symbol;
     uint256 private _totalSupply;
-    
+
     mapping(address => uint256) private _balances;
     mapping(address => mapping(address => uint256)) private _allowances;
 
@@ -57,11 +57,7 @@ contract ERC20 {
         return true;
     }
 
-    function transferFrom(
-        address from,
-        address to,
-        uint256 amount
-    ) public virtual returns (bool) {
+    function transferFrom(address from, address to, uint256 amount) public virtual returns (bool) {
         address spender = msg.sender;
         _spendAllowance(from, spender, amount);
         _transfer(from, to, amount);
@@ -84,11 +80,7 @@ contract ERC20 {
         return true;
     }
 
-    function _transfer(
-        address from,
-        address to,
-        uint256 amount
-    ) internal virtual {
+    function _transfer(address from, address to, uint256 amount) internal virtual {
         require(from != address(0), "ERC20: transfer from the zero address");
         require(to != address(0), "ERC20: transfer to the zero address");
 
@@ -125,11 +117,7 @@ contract ERC20 {
         emit Transfer(account, address(0), amount);
     }
 
-    function _approve(
-        address owner,
-        address spender,
-        uint256 amount
-    ) internal virtual {
+    function _approve(address owner, address spender, uint256 amount) internal virtual {
         require(owner != address(0), "ERC20: approve from the zero address");
         require(spender != address(0), "ERC20: approve to the zero address");
 
@@ -137,11 +125,7 @@ contract ERC20 {
         emit Approval(owner, spender, amount);
     }
 
-    function _spendAllowance(
-        address owner,
-        address spender,
-        uint256 amount
-    ) internal virtual {
+    function _spendAllowance(address owner, address spender, uint256 amount) internal virtual {
         uint256 currentAllowance = allowance(owner, spender);
         if (currentAllowance != type(uint256).max) {
             require(currentAllowance >= amount, "ERC20: insufficient allowance");
@@ -151,4 +135,3 @@ contract ERC20 {
         }
     }
 }
-
