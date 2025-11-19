@@ -1,0 +1,19 @@
+{
+    "name": "web3-trade-pmm",
+    "description": "OKX PMM Protocol",
+    "scripts": {},
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/OKX-Web3/Web3-Trade-PMM.git"
+    },
+    "license": "MIT",
+    "bugs": {
+        "url": "https://github.com/OKX-Web3/Web3-Trade-PMM/issues"
+    },
+    "homepage": "https://github.com/OKX-Web3/Web3-Trade-PMM#readme",
+    "dependencies": {
+        "@1inch/solidity-utils": "2.2.15",
+        "@chainlink/contracts": "0.6.0",
+        "@openzeppelin/contracts": "4.8.1"
+    }
+}
