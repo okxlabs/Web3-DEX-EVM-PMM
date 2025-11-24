@@ -1,15 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/extensions/draft-IERC20Permit.sol";
+import "../interfaces/IERC20.sol";
+import "../interfaces/IERC20Permit.sol";
 import "../interfaces/IDaiLikePermit.sol";
 import "../interfaces/IPermit2.sol";
 import "../libraries/RevertReasonForwarder.sol";
 
-// All core libs are copied from 1inch
-// v5: https://etherscan.io/address/0x1111111254EEB25477B68fb85Ed929f73A960582#code
-// v6: https://etherscan.io/address/0x111111125421ca6dc452d289314280a0f8842a65#code
 /// @title Implements efficient safe methods for ERC20 interface.
 library SafeERC20 {
     error SafeTransferFailed();

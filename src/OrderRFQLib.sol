@@ -14,12 +14,28 @@ library OrderRFQLib {
         uint256 makerAmount; // 0xa0
         uint256 takerAmount; // 0xc0
         bool usePermit2; // 0xe0;
+        bytes permit2Signature; // 0xf0;
+        bytes32 permit2Witness;
+        string permit2WitnessType;
     }
-
-    bytes32 internal constant _LIMIT_ORDER_RFQ_TYPEHASH = keccak256(
-        "OrderRFQ(" "uint256 rfqId," "uint256 expiry," "address makerAsset," "address takerAsset,"
-        "address makerAddress," "uint256 makerAmount," "uint256 takerAmount," "bool usePermit2" ")"
-    );
+    // forgefmt: disable-start
+    bytes32 internal constant _LIMIT_ORDER_RFQ_TYPEHASH =
+        keccak256(
+            "OrderRFQ("
+            "uint256 rfqId,"
+            "uint256 expiry,"
+            "address makerAsset,"
+            "address takerAsset,"
+            "address makerAddress,"
+            "uint256 makerAmount,"
+            "uint256 takerAmount,"
+            "bool usePermit2,"
+            "bytes permit2Signature,"
+            "bytes32 permit2Witness,"
+            "string permit2WitnessType"
+            ")"
+        );
+    // forgefmt: disable-end
 
     function hash(OrderRFQ memory order, bytes32 domainSeparator) internal pure returns (bytes32 result) {
         // Manually encoding each field instead of abi.encode(..., order)
@@ -34,7 +50,10 @@ library OrderRFQLib {
                 order.makerAddress,
                 order.makerAmount,
                 order.takerAmount,
-                order.usePermit2
+                order.usePermit2,
+                keccak256(order.permit2Signature),
+                order.permit2Witness,
+                keccak256(bytes(order.permit2WitnessType))
             )
         );
         return ECDSA.toTypedDataHash(domainSeparator, structHash);

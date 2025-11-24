@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.17;
 
-import "../../src/interfaces/IERC20.sol";
+import "./ERC20.sol";
 import {OrderRFQLib} from "../../src/OrderRFQLib.sol";
 import {Test} from "forge-std/Test.sol";
 
@@ -38,7 +38,10 @@ contract MockMarketMaker is Test {
             makerAddress: address(this),
             makerAmount: amount,
             takerAmount: amount,
-            usePermit2: true
+            usePermit2: true,
+            permit2Signature: "",
+            permit2Witness: bytes32(0),
+            permit2WitnessType: ""
         });
 
         // Return empty signature and signature type for now

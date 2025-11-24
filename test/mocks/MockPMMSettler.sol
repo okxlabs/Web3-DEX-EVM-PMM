@@ -3,7 +3,7 @@ pragma solidity 0.8.17;
 
 import "../../src/interfaces/IPMMSettler.sol";
 import "../../src/interfaces/IWETH.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "../../src/interfaces/IERC20.sol";
 
 contract MockPMMSettler is IPMMSettler {
     IWETH public weth;
