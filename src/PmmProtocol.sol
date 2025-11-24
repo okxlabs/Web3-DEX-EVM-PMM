@@ -199,7 +199,7 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
             // Stack too deep
             // Check time expiration
             uint256 expiration = order.expiry;
-            if (expiration != 0 && block.timestamp > expiration) {
+            if (block.timestamp > expiration) {
                 revert Errors.RFQ_OrderExpired(order.rfqId);
             } // solhint-disable-line not-rely-on-time
             _invalidateOrder(maker, order.rfqId, 0);
