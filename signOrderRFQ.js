@@ -39,7 +39,6 @@ export async function signOrderRFQ({ privateKey, verifyingContract, chainId, ord
   return signature;
 }
 
-// Example Witness Type Hash and String (matching the Solidity implementation)
 export const EXAMPLE_WITNESS_TYPEHASH = ethers.keccak256(ethers.toUtf8Bytes("ExampleWitness(address user)"));
 export const WITNESS_TYPE_STRING = "ExampleWitness witness)ExampleWitness(address user)";
 
