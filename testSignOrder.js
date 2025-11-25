@@ -19,7 +19,10 @@ const sig = await signOrderRFQ({
         makerAmount: ethers.parseUnits("100", 18),
         // 500000000000000000
         takerAmount: ethers.parseUnits("0.5", 18),
-        usePermit2: true
+        usePermit2: true,
+        permit2Signature: "0x",
+        permit2Witness: "0x0000000000000000000000000000000000000000000000000000000000000000",
+        permit2WitnessType: ""
     },
 });
 

@@ -29,6 +29,9 @@ export async function signOrderRFQ({ privateKey, verifyingContract, chainId, ord
       { name: "makerAmount", type: "uint256" },
       { name: "takerAmount", type: "uint256" },
       { name: "usePermit2", type: "bool" },
+      { name: "permit2Signature", type: "bytes" },
+      { name: "permit2Witness", type: "bytes32" },
+      { name: "permit2WitnessType", type: "string" },
     ],
   };
 
