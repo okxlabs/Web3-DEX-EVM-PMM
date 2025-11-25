@@ -1,4 +1,4 @@
-import { Wallet, ethers } from "ethers";
+import { Wallet, ethers, Signature } from "ethers";
 
 /**
  * Sign an OrderRFQ-typed struct and return the signature string
@@ -19,28 +19,66 @@ export async function signOrderRFQ({ privateKey, verifyingContract, chainId, ord
     verifyingContract,
   };
 
-  const types = {
-    OrderRFQ: [
-      { name: "rfqId", type: "uint256" },
-      { name: "expiry", type: "uint256" },
-      { name: "makerAsset", type: "address" },
-      { name: "takerAsset", type: "address" },
-      { name: "makerAddress", type: "address" },
-      { name: "makerAmount", type: "uint256" },
-      { name: "takerAmount", type: "uint256" },
-      { name: "usePermit2", type: "bool" },
-      { name: "permit2Signature", type: "bytes" },
-      { name: "permit2Witness", type: "bytes32" },
-      { name: "permit2WitnessType", type: "string" },
-    ],
-  };
+  // OrderRFQ typehash from Solidity - must match exactly
+  const ORDER_RFQ_TYPEHASH = ethers.keccak256(ethers.toUtf8Bytes(
+    "OrderRFQ(uint256 rfqId,uint256 expiry,address makerAsset,address takerAsset,address makerAddress,uint256 makerAmount,uint256 takerAmount,bool usePermit2,bytes permit2Signature,bytes32 permit2Witness,string permit2WitnessType)"
+  ));
 
-  const signature = await wallet.signTypedData(domain, types, order);
-  return signature;
+  // Domain separator calculation matching Solidity
+  const EIP712_DOMAIN_TYPEHASH = ethers.keccak256(ethers.toUtf8Bytes(
+    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+  ));
+  
+  const domainSeparator = ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(
+    ["bytes32", "bytes32", "bytes32", "uint256", "address"],
+    [
+      EIP712_DOMAIN_TYPEHASH,
+      ethers.keccak256(ethers.toUtf8Bytes(domain.name)),
+      ethers.keccak256(ethers.toUtf8Bytes(domain.version)),
+      domain.chainId,
+      domain.verifyingContract
+    ]
+  ));
+
+  // Struct hash calculation matching Solidity OrderRFQLib.hash()
+  const structHash = ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(
+    ["bytes32", "uint256", "uint256", "address", "address", "address", "uint256", "uint256", "bool", "bytes32", "bytes32", "bytes32"],
+    [
+      ORDER_RFQ_TYPEHASH,
+      order.rfqId,
+      order.expiry,
+      order.makerAsset,
+      order.takerAsset,
+      order.makerAddress,
+      order.makerAmount,
+      order.takerAmount,
+      order.usePermit2,
+      ethers.keccak256(order.permit2Signature), // Hashed like in Solidity
+      order.permit2Witness,
+      ethers.keccak256(ethers.toUtf8Bytes(order.permit2WitnessType)) // Hashed like in Solidity
+    ]
+  ));
+
+  // Final digest calculation matching ECDSA.toTypedDataHash
+  const digest = ethers.keccak256(ethers.concat([
+    "0x1901",
+    domainSeparator,
+    structHash
+  ]));
+
+  // Sign the digest directly (EIP-712 signature, no Ethereum message prefix)
+  // Use signingKey.sign() to sign the raw digest without any prefixes
+  const sig = wallet.signingKey.sign(digest);
+  
+  // Reconstruct signature as r + s + v to match Solidity abi.encodePacked(r, s, v)
+  const rearrangedSignature = ethers.concat([sig.r, sig.s, ethers.toBeHex(sig.v, 1)]);
+  
+  return ethers.hexlify(rearrangedSignature);
 }
 
 export const EXAMPLE_WITNESS_TYPEHASH = ethers.keccak256(ethers.toUtf8Bytes("ExampleWitness(address user)"));
-export const WITNESS_TYPE_STRING = "ExampleWitness witness)ExampleWitness(address user)";
+export const WITNESS_TYPE_STRING = "ExampleWitness witness)ExampleWitness(address user)TokenPermissions(address token,uint256 amount)"
+export const TOKEN_PERMISSIONS_TYPEHASH = ethers.keccak256(ethers.toUtf8Bytes("TokenPermissions(address token,uint256 amount)"));
 
 /**
  * Calculate permit2 witness hash from witness data
@@ -61,7 +99,7 @@ export function calculateWitness(witnessData, witnessTypehash = EXAMPLE_WITNESS_
 /**
  * Sign Permit2 with witness support
  *
- * @param {object} permit - Permit2 PermitTransferFrom object
+ * @param {object} permit - Permit2 PermitTransferFrom object with { permitted: { token, amount }, nonce, deadline }
  * @param {string} spender - Spender address (usually the PMM contract)
  * @param {string} witness - Witness hash (bytes32)
  * @param {string} witnessTypeString - Full witness type string for EIP-712
@@ -122,7 +160,12 @@ export async function signPermit2WithWitness({
     ])
   );
 
-  // Sign the digest
-  const signature = await wallet.signMessage(ethers.getBytes(digest));
-  return signature;
+  // Sign the digest directly (EIP-712 signature, no Ethereum message prefix)
+  // Use _signingKey().sign() to sign the raw digest without any prefixes
+  const sig = wallet.signingKey.sign(digest);
+  
+  // Reconstruct signature as r + s + v to match Solidity abi.encodePacked(r, s, v)
+  const rearrangedSignature = ethers.concat([sig.r, sig.s, ethers.toBeHex(sig.v, 1)]);
+  
+  return ethers.hexlify(rearrangedSignature);
 }
