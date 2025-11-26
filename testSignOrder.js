@@ -24,7 +24,7 @@ const order1 = {
     verifyingContract: VERIFYING_CONTRACT,
     chainId: chainId,
     order: {
-        rfqId: 1,
+        rfqId: rfqId,
         expiry: expiry,
         makerAsset: MAKER_ASSET,
         takerAsset: TAKER_ASSET,
@@ -44,7 +44,7 @@ const order2 = {
     verifyingContract: VERIFYING_CONTRACT,
     chainId: chainId,
     order: {
-        rfqId: 2,
+        rfqId: rfqId,
         expiry: expiry,
         makerAsset: MAKER_ASSET,
         takerAsset: TAKER_ASSET,
