@@ -15,13 +15,14 @@ const TAKER_ASSET = "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9";
 const MAKER_AMOUNT = 400000000000000;
 const TAKER_AMOUNT = 1000;
 
-const rfqId = 3312;
+const chainId = 42161;
+const rfqId = 42;
 
 // Order 1: usePermit2: false
 const order1 = {
     privateKey: privateKey,
     verifyingContract: VERIFYING_CONTRACT,
-    chainId: 31337,
+    chainId: chainId,
     order: {
         rfqId: 1,
         expiry: expiry,
@@ -41,7 +42,7 @@ const order1 = {
 const order2 = {
     privateKey: privateKey,
     verifyingContract: VERIFYING_CONTRACT,
-    chainId: 31337,
+    chainId: chainId,
     order: {
         rfqId: 2,
         expiry: expiry,
@@ -61,7 +62,7 @@ const order2 = {
 const order3 = {
     privateKey: privateKey,
     verifyingContract: VERIFYING_CONTRACT,
-    chainId: 42161,
+    chainId: chainId,
     order: {
         rfqId: rfqId,
         expiry: expiry,
