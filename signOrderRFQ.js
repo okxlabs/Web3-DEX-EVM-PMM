@@ -1,4 +1,4 @@
-import { Wallet, ethers, Signature } from "ethers";
+import { Wallet, ethers } from "ethers";
 
 /**
  * Sign an OrderRFQ-typed struct and return the signature string
