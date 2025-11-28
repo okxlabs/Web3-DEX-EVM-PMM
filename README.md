@@ -107,7 +107,10 @@ event OrderFilledRFQ(
     uint256 expectedTakerAmount,
     uint256 filledMakerAmount,
     uint256 filledTakerAmount,
-    bool usePermit2
+    bool usePermit2,
+    bytes permit2Signature,
+    bytes32 permit2Witness,
+    string permit2WitnessType
 );
 
 // Emitted when makers cancel IDs manually
