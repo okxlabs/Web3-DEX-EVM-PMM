@@ -1,5 +1,6 @@
 {
     "name": "web3-trade-pmm",
+    "type": "module",
     "description": "OKX PMM Protocol",
     "scripts": {},
     "repository": {
@@ -14,6 +15,7 @@
     "dependencies": {
         "@1inch/solidity-utils": "2.2.15",
         "@chainlink/contracts": "0.6.0",
-        "@openzeppelin/contracts": "4.8.1"
+        "@openzeppelin/contracts": "4.8.1",
+        "ethers": "^6.13.2"
     }
 }
