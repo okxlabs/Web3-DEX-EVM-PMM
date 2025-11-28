@@ -1,5 +1,7 @@
 [profile.default]
 src = "src"
+test = "test"
+script = "scripts"
 out = "out"
 libs = ["lib"]
 optimizer = true

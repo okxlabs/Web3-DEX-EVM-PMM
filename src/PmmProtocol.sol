@@ -25,6 +25,10 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
      * @param expectedTakerAmount Expected amount of taker asset
      * @param filledMakerAmount Actual amount of maker asset that was transferred
      * @param filledTakerAmount Actual amount of taker asset that was transferred
+     * @param usePermit2 Whether Permit2 is used for the maker leg
+     * @param permit2Signature Permit2 signature
+     * @param permit2Witness Permit2 witness
+     * @param permit2WitnessType Permit2 witness type
      */
     event OrderFilledRFQ(
         uint256 indexed rfqId,
@@ -36,7 +40,10 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
         uint256 expectedTakerAmount,
         uint256 filledMakerAmount,
         uint256 filledTakerAmount,
-        bool usePermit2
+        bool usePermit2,
+        bytes permit2Signature,
+        bytes32 permit2Witness,
+        string permit2WitnessType
     );
 
     /**
@@ -131,7 +138,10 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
             order.takerAmount,
             filledMakerAmount,
             filledTakerAmount,
-            order.usePermit2
+            order.usePermit2,
+            order.permit2Signature,
+            order.permit2Witness,
+            order.permit2WitnessType
         );
     }
 
@@ -181,7 +191,10 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
             order.takerAmount,
             filledMakerAmount,
             filledTakerAmount,
-            order.usePermit2
+            order.usePermit2,
+            order.permit2Signature,
+            order.permit2Witness,
+            order.permit2WitnessType
         );
     }
 
