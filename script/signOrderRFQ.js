@@ -13,7 +13,7 @@ export async function signOrderRFQ({ privateKey, verifyingContract, chainId, ord
   const wallet = new Wallet(privateKey);
 
   const domain = {
-    name: "OKX Lab PMM Protocol",
+    name: "OnChain Labs PMM Protocol",
     version: "1.0",
     chainId,
     verifyingContract,
