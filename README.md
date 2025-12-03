@@ -167,67 +167,7 @@ RFQ IDs are tracked via a two-level bitmap:
 
 ## 5. API Specification
 
-> **Every maker must expose both endpoints.** The aggregator expects JSON over HTTPS and millisecond-level response times when requesting a firm order.
-
-### 5.1 `GET /levels`
-
-- **Description**: Returns aggregated depth (price, size) for every supported pair. Tokens are concatenated as `base_quote` addresses.
-
-Example:
-
-```json
-{
-  "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2_0xdac17f958d2ee523a2206206994597c13d831ec7": [
-    ["4083.38", "0.005"],
-    ["4083.38", "1.2172"],
-    ["4083.20", "0.040"],
-    ["4083.10", "0.1122534"]
-  ],
-  "0xdac17f958d2ee523a2206206994597c13d831ec7_0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": [
-    ["0.000244553189095862", "20.44545"],
-    ["0.000244553189095862", "5471.949504"]
-  ]
-}
-```
-
-### 5.2 `POST /order`
-
-- **Description**: Returns a signed `OrderRFQ` plus the maker's signature (and optional Permit2 data) for the requested taker amount.
-
-**Request body**
-- `baseToken` - Address of the taker asset.
-- `quoteToken` - Address of the maker asset.
-- `amount` - Desired taker-side amount (stringified integer).
-- `taker` - Address that will broadcast the trade (can be used inside witness data if desired).
-- `refId` - Maker-assigned RFQ ID (should fit in 64 bits).
-- `expiryDuration` - Quote validity window in seconds (default 90).
-- `usePermit2` - Optional boolean hint indicating whether the maker leg should rely on Permit2.
-
-**Sample response**
-
-```json
-{
-  "order": {
-    "rfqId": "123456789",
-    "expiry": "1732804800",
-    "makerAsset": "0xdac17f958d2ee523a2206206994597c13d831ec7",
-    "takerAsset": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
-    "makerAddress": "0xmaker",
-    "makerAmount": "22723800",
-    "takerAmount": "6000000000000000",
-    "usePermit2": true,
-    "permit2Signature": "0x5ce1...b4e7",
-    "permit2Witness": "0x0fb9...77d4",
-    "permit2WitnessType": "ExampleWitness witness)ExampleWitness(address user)TokenPermissions(address token,uint256 amount)"
-  },
-  "signature": "0xc64bf62b7619edda019fe491da256b9fbe892fbfeac91f9d1fce168478ad53053dde038584f063fe21e267fcb4e758bcf420036cd2838fe5cbd993ec6d3dde561b"
-}
-```
-
-**Notes**
-- `rfqId` is returned verbatim; the router masks it to 64 bits when writing calldata.
-- `permit2Signature` can be an empty string when the maker relies on Permit2 allowances.
-- The protocol sets `flagsAndAmount` when filling; makers do not sign this value.
+refer to: https://web3.okx.com/zh-hant/build/dev-docs/wallet-api/dex-api-market-maker
 
 ### 5.3 Permit2 Inline Signature Payload
 
@@ -279,10 +219,10 @@ The helper also exports `signPermit2WithWitness`, which produces the Permit2 sig
 
 - `forge test` - Runs the Foundry test-suite (`test/`), including fork tests for Permit2 witness flows and WETH unwrap scenarios.
 - `broadcast/Deploy*.s.sol` - Contains deployment artifacts generated via Foundry Scripts; review them before mainnet pushes.
-- `Makefile` - Provides shortcuts for linting and coverage (optional).
+
 
 ## 8. Document Metadata
 
-- **Document version**: v3.0
+- **Document version**: v3.1
 - **Last updated**: 2025
 - **Language**: English
