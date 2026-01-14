@@ -24,14 +24,20 @@ contract PmmProtocolPermitWitnessFork is TestHelper {
     address constant usdt = 0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9;
     address constant usdc = 0xaf88d065e77c8cC2239327C5EDb3A432268e5831;
     address constant permit2 = 0x000000000022D473030F116dDEE9F6B43aC78BA3;
-
-    // Example Witness Struct
-    struct ExampleWitness {
-        address user;
+    // `vm.makeAddress()` is not available in older forge-std versions; use a fixed address instead.
+    address constant USER = 0x1111111111111111111111111111111111111111;
+    // Consideration Witness Struct (matches maker-side signing helpers)
+    struct Consideration {
+        address token;
+        uint256 amount;
+        address counterparty;
     }
 
-    bytes32 constant EXAMPLE_WITNESS_TYPEHASH = keccak256("ExampleWitness(address user)");
-    string constant WITNESS_TYPE_STRING = "ExampleWitness witness)ExampleWitness(address user)";
+    bytes32 constant CONSIDERATION_TYPEHASH = keccak256("Consideration(address token,uint256 amount,address counterparty)");
+    // NOTE: Permit2 witnessTypeString is appended to the Permit2 stub:
+    // "PermitWitnessTransferFrom(TokenPermissions permitted,address spender,uint256 nonce,uint256 deadline," + witnessTypeString
+    string constant WITNESS_TYPE_STRING =
+        "Consideration witness)Consideration(address token,uint256 amount,address counterparty)TokenPermissions(address token,uint256 amount)";
 
     function setUp() public {
         vm.createSelectFork("arbitrum");
@@ -51,13 +57,15 @@ contract PmmProtocolPermitWitnessFork is TestHelper {
     }
 
     function testARBPermitWitnessTransfer() public {
-        // Create Witness Data
-        ExampleWitness memory witnessData = ExampleWitness({user: MAKER_ADDRESS});
-        bytes32 witness = keccak256(abi.encode(EXAMPLE_WITNESS_TYPEHASH, witnessData));
-
         // Create Order
         OrderRFQLib.OrderRFQ memory order =
             createOrder(13579, block.timestamp + 1000, usdc, usdt, MAKER_ADDRESS, 100000, 90000, true);
+
+        // Create Witness Data
+        // Bind the Permit2 signature to (token, amount, counterparty=spender)
+        Consideration memory witnessData =
+            Consideration({token: usdc, amount: order.makerAmount, counterparty: address(USER)});
+        bytes32 witness = keccak256(abi.encode(CONSIDERATION_TYPEHASH, witnessData));
 
         // Set Witness Fields
         order.permit2Witness = witness;
