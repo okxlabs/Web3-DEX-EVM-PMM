@@ -25,6 +25,7 @@ contract Deploy is Script {
     address constant WETH_BASE = 0x4200000000000000000000000000000000000006;
     address constant WETH_BSC = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c; // WBNB
     address deployer = vm.rememberKey(vm.envUint("PRIVATE_KEY_DEPLOYER"));
+
     function run() external {
         address weth = _getWeth();
         require(weth != address(0), "Deploy: unsupported chain");
@@ -49,4 +50,3 @@ contract Deploy is Script {
         revert("Deploy: unsupported chain");
     }
 }
-

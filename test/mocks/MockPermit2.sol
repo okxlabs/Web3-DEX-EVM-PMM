@@ -80,8 +80,8 @@ contract MockPermit2 is IPermit2 {
         PermitTransferFrom memory permitData,
         SignatureTransferDetails calldata transferDetails,
         address owner,
-        bytes32 /* witness */,
-        string memory /* witnessTypeString */,
+        bytes32, /* witness */
+        string memory, /* witnessTypeString */
         bool witnessUsed
     ) private {
         if (block.timestamp > permitData.deadline) {
@@ -96,4 +96,3 @@ contract MockPermit2 is IPermit2 {
         );
     }
 }
-

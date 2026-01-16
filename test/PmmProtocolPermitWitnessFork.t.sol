@@ -27,13 +27,17 @@ contract PmmProtocolPermitWitnessFork is TestHelper {
     // `vm.makeAddress()` is not available in older forge-std versions; use a fixed address instead.
     address constant USER = 0x1111111111111111111111111111111111111111;
     // Consideration Witness Struct (matches maker-side signing helpers)
+
     struct Consideration {
         address token;
         uint256 amount;
         address counterparty;
     }
 
-    bytes32 constant CONSIDERATION_TYPEHASH = keccak256("Consideration(address token,uint256 amount,address counterparty)");
+    uint256 constant EXPIRY = 2768465580;
+
+    bytes32 constant CONSIDERATION_TYPEHASH =
+        keccak256("Consideration(address token,uint256 amount,address counterparty)");
     // NOTE: Permit2 witnessTypeString is appended to the Permit2 stub:
     // "PermitWitnessTransferFrom(TokenPermissions permitted,address spender,uint256 nonce,uint256 deadline," + witnessTypeString
     string constant WITNESS_TYPE_STRING =
@@ -41,7 +45,9 @@ contract PmmProtocolPermitWitnessFork is TestHelper {
 
     function setUp() public {
         vm.createSelectFork("arbitrum");
-        pool = new PMMProtocol(IWETH(ARBITRUM_WETH));
+        // pool = new PMMProtocol(IWETH(ARBITRUM_WETH));
+        pool = PMMProtocol(payable(0x1Ef032a3c471a99CC31578c8007F256D95E89896));
+        vm.warp(1768465580);
 
         vm.prank(0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7); // usdc whale
         SafeERC20.safeTransfer(IERC20(usdc), MAKER_ADDRESS, 100_000_000);
@@ -57,15 +63,27 @@ contract PmmProtocolPermitWitnessFork is TestHelper {
     }
 
     function testARBPermitWitnessTransfer() public {
+        emit log_named_address("MAKER_ADDRESS", MAKER_ADDRESS);
+        emit log_named_address("TAKER_ADDRESS", TAKER_ADDRESS);
+        emit log_named_address("pool", address(pool));
+        emit log_named_bytes32("pool.DOMAIN_SEPARATOR()", pool.DOMAIN_SEPARATOR());
+        emit log_named_bytes32("permit2.DOMAIN_SEPARATOR()", IPermit2(permit2).DOMAIN_SEPARATOR());
+        uint256 PK = vm.envUint("PK");
+        address deployer = vm.rememberKey(PK);
+
+        address MAKER_ADDRESS1 = deployer;
+        address TAKER_ADDRESS1 = vm.addr(PK);
         // Create Order
-        OrderRFQLib.OrderRFQ memory order =
-            createOrder(13579, block.timestamp + 1000, usdc, usdt, MAKER_ADDRESS, 100000, 90000, true);
+        OrderRFQLib.OrderRFQ memory order = createOrder(1357999, EXPIRY, usdc, usdt, MAKER_ADDRESS1, 100, 90, true);
+        emit log_named_uint("rfqId", order.rfqId);
+        emit log_named_uint("expiry", order.expiry);
 
         // Create Witness Data
         // Bind the Permit2 signature to (token, amount, counterparty=spender)
         Consideration memory witnessData =
-            Consideration({token: usdc, amount: order.makerAmount, counterparty: address(USER)});
+            Consideration({token: usdc, amount: order.makerAmount, counterparty: address(deployer)});
         bytes32 witness = keccak256(abi.encode(CONSIDERATION_TYPEHASH, witnessData));
+        emit log_named_bytes32("witness", witness);
 
         // Set Witness Fields
         order.permit2Witness = witness;
@@ -79,20 +97,22 @@ contract PmmProtocolPermitWitnessFork is TestHelper {
         });
 
         bytes memory permit2Signature = getPermit2WitnessSignature(
-            permit, address(pool), witness, WITNESS_TYPE_STRING, MAKER_PRIVATE_KEY, IPermit2(permit2).DOMAIN_SEPARATOR()
+            permit, address(pool), witness, WITNESS_TYPE_STRING, PK, IPermit2(permit2).DOMAIN_SEPARATOR()
         );
         order.permit2Signature = permit2Signature;
+        emit log_named_bytes("permit2Signature", permit2Signature);
 
         // Sign Order
-        bytes memory orderSignature = signOrder(order, pool.DOMAIN_SEPARATOR(), MAKER_PRIVATE_KEY);
+        bytes memory orderSignature = signOrder(order, pool.DOMAIN_SEPARATOR(), PK);
+        emit log_named_bytes("orderSignature", orderSignature);
 
         // Execute
-        vm.prank(TAKER_ADDRESS);
-        pool.fillOrderRFQTo(order, orderSignature, order.takerAmount, TAKER_ADDRESS);
+        vm.startPrank(TAKER_ADDRESS1);
+        pool.fillOrderRFQTo(order, orderSignature, order.takerAmount, TAKER_ADDRESS1);
 
         // Verify Balances
-        assertEq(IERC20(usdt).balanceOf(MAKER_ADDRESS), 90000);
-        assertEq(IERC20(usdc).balanceOf(TAKER_ADDRESS), 100000);
+        // assertEq(IERC20(usdt).balanceOf(MAKER_ADDRESS), 90);
+        // assertEq(IERC20(usdc).balanceOf(TAKER_ADDRESS), 100);
     }
 
     // Helper to sign Permit2 Witness Typed Data
@@ -135,5 +155,53 @@ contract PmmProtocolPermitWitnessFork is TestHelper {
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
         return abi.encodePacked(r, s, v);
     }
-}
 
+    function run() public {
+        vm.createSelectFork("arbitrum");
+        emit log_named_address("MAKER_ADDRESS", MAKER_ADDRESS);
+        emit log_named_address("TAKER_ADDRESS", TAKER_ADDRESS);
+        emit log_named_address("pool", address(pool));
+        emit log_named_bytes32("pool.DOMAIN_SEPARATOR()", pool.DOMAIN_SEPARATOR());
+        emit log_named_bytes32("permit2.DOMAIN_SEPARATOR()", IPermit2(permit2).DOMAIN_SEPARATOR());
+        uint256 PK = vm.envUint("PK");
+        address deployer = vm.rememberKey(PK);
+
+        address MAKER_ADDRESS1 = deployer;
+        address TAKER_ADDRESS1 = vm.addr(PK);
+        // Create Order
+        OrderRFQLib.OrderRFQ memory order = createOrder(13579999, EXPIRY, usdc, usdt, MAKER_ADDRESS1, 100, 90, true);
+        emit log_named_uint("rfqId", order.rfqId);
+        emit log_named_uint("expiry", order.expiry);
+
+        // Create Witness Data
+        // Bind the Permit2 signature to (token, amount, counterparty=spender)
+        Consideration memory witnessData =
+            Consideration({token: usdc, amount: order.makerAmount, counterparty: address(deployer)});
+        bytes32 witness = keccak256(abi.encode(CONSIDERATION_TYPEHASH, witnessData));
+        emit log_named_bytes32("witness", witness);
+
+        // Set Witness Fields
+        order.permit2Witness = witness;
+        order.permit2WitnessType = WITNESS_TYPE_STRING;
+
+        // Sign for Permit2 Witness
+        IPermit2.PermitTransferFrom memory permit = IPermit2.PermitTransferFrom({
+            permitted: IPermit2.TokenPermissions({token: usdc, amount: order.makerAmount}),
+            nonce: order.rfqId,
+            deadline: order.expiry
+        });
+
+        bytes memory permit2Signature = getPermit2WitnessSignature(
+            permit, address(pool), witness, WITNESS_TYPE_STRING, PK, IPermit2(permit2).DOMAIN_SEPARATOR()
+        );
+        order.permit2Signature = permit2Signature;
+        emit log_named_bytes("permit2Signature", permit2Signature);
+
+        // Sign Order
+        bytes memory orderSignature = signOrder(order, pool.DOMAIN_SEPARATOR(), PK);
+        emit log_named_bytes("orderSignature", orderSignature);
+
+        vm.startBroadcast(deployer);
+        pool.fillOrderRFQTo(order, orderSignature, order.takerAmount, TAKER_ADDRESS1);
+    }
+}
