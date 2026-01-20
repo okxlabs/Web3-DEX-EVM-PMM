@@ -22,53 +22,74 @@
                 <div class="form-group">
                     <label for="jsonInput">Order JSON</label>
                     <textarea id="jsonInput" placeholder='{
-  "chainId": 1,
-  "verifyingContract": "0x...",
+  "chainId": 42161,
+  "verifyingContract": "auto from chainId",
   "order": {
-    "rfqId": "4262300009041366528",
+    "rfqId": "123456",
     "expiry": 1234567890,
-    "makerAsset": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
-    "takerAsset": "0xdac17f958d2ee523a2206206994597c13d831ec7",
-    "makerAddress": "0x...",
-    "makerAmount": "1000000000000000",
-    "takerAmount": "3198469",
+    "makerAsset": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+    "takerAsset": "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
+    "makerAddress": "auto from privateKey",
+    "makerAmount": "100",
+    "takerAmount": "90",
     "usePermit2": true,
-    "permit2Signature": "0x",
-    "permit2Witness": "0x0000000000000000000000000000000000000000000000000000000000000000",
-    "permit2WitnessType": ""
+    "permit2Signature": "TO_BE_SIGNED",
+    "permit2Witness": "TO_BE_CALCULATED",
+    "permit2WitnessType": "ExampleWitness witness)..."
   },
   "privateKey": "0x...",
-  "permit2DomainSeparator": "0x..."
+  "permit2DomainSeparator": "0x8a6e6e19...",
+  "exampleWitness": { "user": "0x..." },
+  "consideration": { "token": "0x...", "amount": "100", "counterparty": "0x..." }
 }'></textarea>
                 </div>
 
-                <div class="form-group">
-                    <label>Permit2 Mode</label>
-                    <div class="radio-group">
-                        <label class="radio-label">
-                            <input type="radio" name="permit2Mode" value="sign" checked>
-                            <span>Sign New Permit2</span>
-                        </label>
-                        <label class="radio-label">
-                            <input type="radio" name="permit2Mode" value="debug">
-                            <span>Debug Existing Signature</span>
-                        </label>
-                    </div>
-                </div>
 
                 <div class="button-group">
                     <button id="generateBtn" class="btn btn-primary">Generate Signature</button>
-                    <button id="loadExampleBtn" class="btn btn-secondary">Load Example</button>
                     <button id="clearBtn" class="btn btn-secondary">Clear</button>
+                </div>
+                
+                <div class="example-section">
+                    <label>Load Example (from testSignOrder.js)</label>
+                    <div class="example-buttons">
+                        <button id="loadExample1Btn" class="btn btn-example">Order 1<br><small>No Permit2</small></button>
+                        <button id="loadExample2Btn" class="btn btn-example">Order 2<br><small>Permit2, No Witness</small></button>
+                        <button id="loadExample3Btn" class="btn btn-example">Order 3<br><small>ExampleWitness</small></button>
+                        <button id="loadExample4Btn" class="btn btn-example">Order 4<br><small>Consideration</small></button>
+                    </div>
+                </div>
+                
+                <div class="info-box">
+                    <h4>Auto-fill Features</h4>
+                    <ul>
+                        <li><strong>verifyingContract</strong>: Auto-filled from chainId (Ethereum, Arbitrum, Base, BNB)</li>
+                        <li><strong>makerAddress</strong>: Auto-derived from privateKey</li>
+                        <li><strong>permit2Witness</strong>: Auto-calculated from witness structs:
+                            <ul>
+                                <li><code>exampleWitness: { user }</code></li>
+                                <li><code>consideration: { token, amount, counterparty }</code></li>
+                            </ul>
+                        </li>
+                    </ul>
                 </div>
             </section>
 
             <!-- Output Section -->
             <section class="panel output-panel">
                 <h2>Output</h2>
-                <p class="output-note">Verification order: structData → structHash → domainSeparator → digest → signature</p>
+                <p class="output-note">Verification order: structData -> structHash -> domainSeparator -> digest -> signature</p>
 
                 <div id="errorDisplay" class="error-display hidden"></div>
+
+                <!-- 0. Full Order -->
+                <div class="output-group full-order-group">
+                    <div class="output-header">
+                        <label>Full Order <span class="hint">(with auto-filled values)</span></label>
+                        <button class="copy-btn" data-target="fullOrderOutput">Copy</button>
+                    </div>
+                    <pre id="fullOrderOutput" class="output-value mono full-order">-</pre>
+                </div>
 
                 <!-- 1. Struct Data -->
                 <div class="output-group">
@@ -180,6 +201,14 @@
                     </button>
                     <div class="collapsible-content">
                         <div class="output-subgroup">
+                            <label>Chain</label>
+                            <div id="chainNameOutput" class="output-value mono">-</div>
+                        </div>
+                        <div class="output-subgroup">
+                            <label>Contract Address</label>
+                            <div id="contractAddressOutput" class="output-value mono">-</div>
+                        </div>
+                        <div class="output-subgroup">
                             <label>Order TypeHash</label>
                             <div id="typeHashOutput" class="output-value mono">-</div>
                         </div>
@@ -203,6 +232,9 @@
         <footer>
             <p>OnChain Labs PMM Protocol - EIP-712 Debug Tool</p>
             <p class="version">Contract Version: 1.0</p>
+            <p class="deployed-info">
+                Deployed: Ethereum (0x0bdf..bb6) | Arbitrum (0x1ef0..896) | Base (0xed97..a5) | BNB (0x9ff5..a3)
+            </p>
         </footer>
     </div>
 

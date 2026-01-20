@@ -25,26 +25,185 @@ const ORDER_RFQ_TYPE_STRING =
 const EIP712_DOMAIN_TYPE_STRING = 
     "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)";
 
-// Example order for testing
-const EXAMPLE_ORDER = {
-    chainId: 1,
-    verifyingContract: "0x1234567890123456789012345678901234567890",
-    order: {
-        rfqId: "4262300009041366528",
-        expiry: Math.floor(Date.now() / 1000) + 3600,
-        makerAsset: "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
-        takerAsset: "0xdac17f958d2ee523a2206206994597c13d831ec7",
-        makerAddress: "0xd68e2150cd2da77decaeb01ab630c864ad612aaa",
-        makerAmount: "1000000000000000",
-        takerAmount: "3198469",
-        usePermit2: false,
-        permit2Signature: "0x",
-        permit2Witness: "0x0000000000000000000000000000000000000000000000000000000000000000",
-        permit2WitnessType: ""
-    },
-    privateKey: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-    permit2DomainSeparator: "0x0000000000000000000000000000000000000000000000000000000000000000"
+// Deployed contract addresses from DEPLOYMENT.md
+const DEPLOYED_CONTRACTS = {
+    1: "0x0bdf246b4aef9cfe4dd6eef153a1b645ac4bcbb6",      // Ethereum Mainnet
+    42161: "0x1ef032a3c471a99cc31578c8007f256d95e89896",  // Arbitrum One
+    8453: "0xed97b4331fff9dc8c40936532a04ac1400f273a5",   // Base
+    56: "0x9ff547bbb813a0e5d53742c7a5f7370dcea214a3"      // BNB Chain
 };
+
+const CHAIN_NAMES = {
+    1: "Ethereum Mainnet",
+    42161: "Arbitrum One",
+    8453: "Base",
+    56: "BNB Chain"
+};
+
+// Permit2 domain separators (can be computed or looked up)
+const PERMIT2_DOMAIN_SEPARATORS = {
+    42161: "0x8a6e6e19bdfb3db3409910416b47c2f8fc28b49488d6555c7fceaa4479135bc3"  // Arbitrum
+};
+
+// Witness type strings
+const EXAMPLE_WITNESS_TYPE_STRING = "ExampleWitness witness)ExampleWitness(address user)TokenPermissions(address token,uint256 amount)";
+const CONSIDERATION_TYPE_STRING = "Consideration witness)Consideration(address token,uint256 amount,address counterparty)TokenPermissions(address token,uint256 amount)";
+
+// Get current timestamp + 30 days for expiry
+function getDefaultExpiry() {
+    return Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60;
+}
+
+// Generate random rfqId
+function generateRfqId() {
+    return Math.floor(Math.random() * 10000000000000).toString();
+}
+
+// Example private key (Foundry default account #0)
+const EXAMPLE_PRIVATE_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+
+// Get makerAddress from private key
+function getMakerAddress(privateKey) {
+    try {
+        const wallet = new ethers.Wallet(privateKey);
+        return wallet.address;
+    } catch (e) {
+        return "0x0000000000000000000000000000000000000000";
+    }
+}
+
+// Example orders matching testSignOrder.js
+function getExampleOrders() {
+    const expiry = getDefaultExpiry();
+    const rfqId = generateRfqId();
+    const makerAddress = getMakerAddress(EXAMPLE_PRIVATE_KEY);
+    
+    // Arbitrum assets
+    const MAKER_ASSET = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";  // USDC on Arbitrum
+    const TAKER_ASSET = "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9";  // USDT on Arbitrum
+    const MAKER_AMOUNT = "100";
+    const TAKER_AMOUNT = "90";
+    
+    return {
+        // Order 1: usePermit2: false
+        order1: {
+            chainId: 42161,
+            verifyingContract: DEPLOYED_CONTRACTS[42161],
+            order: {
+                rfqId: rfqId,
+                expiry: expiry,
+                makerAsset: MAKER_ASSET,
+                takerAsset: TAKER_ASSET,
+                makerAddress: makerAddress,
+                makerAmount: MAKER_AMOUNT,
+                takerAmount: TAKER_AMOUNT,
+                usePermit2: false,
+                permit2Signature: "0x",
+                permit2Witness: "0x0000000000000000000000000000000000000000000000000000000000000000",
+                permit2WitnessType: ""
+            },
+            privateKey: EXAMPLE_PRIVATE_KEY,
+            permit2DomainSeparator: PERMIT2_DOMAIN_SEPARATORS[42161]
+        },
+        
+        // Order 2: usePermit2: true, no witness
+        order2: {
+            chainId: 42161,
+            verifyingContract: DEPLOYED_CONTRACTS[42161],
+            order: {
+                rfqId: rfqId,
+                expiry: expiry,
+                makerAsset: MAKER_ASSET,
+                takerAsset: TAKER_ASSET,
+                makerAddress: makerAddress,
+                makerAmount: MAKER_AMOUNT,
+                takerAmount: TAKER_AMOUNT,
+                usePermit2: true,
+                permit2Signature: "0x",
+                permit2Witness: "0x0000000000000000000000000000000000000000000000000000000000000000",
+                permit2WitnessType: ""
+            },
+            privateKey: EXAMPLE_PRIVATE_KEY,
+            permit2DomainSeparator: PERMIT2_DOMAIN_SEPARATORS[42161]
+        },
+        
+        // Order 3: usePermit2: true, with ExampleWitness
+        order3: {
+            chainId: 42161,
+            verifyingContract: DEPLOYED_CONTRACTS[42161],
+            order: {
+                rfqId: rfqId,
+                expiry: expiry,
+                makerAsset: MAKER_ASSET,
+                takerAsset: TAKER_ASSET,
+                makerAddress: makerAddress,
+                makerAmount: MAKER_AMOUNT,
+                takerAmount: TAKER_AMOUNT,
+                usePermit2: true,
+                permit2Signature: "TO_BE_SIGNED",
+                permit2Witness: "TO_BE_CALCULATED",
+                permit2WitnessType: EXAMPLE_WITNESS_TYPE_STRING
+            },
+            privateKey: EXAMPLE_PRIVATE_KEY,
+            permit2DomainSeparator: PERMIT2_DOMAIN_SEPARATORS[42161],
+            exampleWitness: {
+                user: makerAddress
+            },
+            _note: "permit2Witness will be calculated from ExampleWitness struct"
+        },
+        
+        // Order 4: usePermit2: true, with Consideration witness
+        order4: {
+            chainId: 42161,
+            verifyingContract: DEPLOYED_CONTRACTS[42161],
+            order: {
+                rfqId: rfqId,
+                expiry: expiry,
+                makerAsset: MAKER_ASSET,
+                takerAsset: TAKER_ASSET,
+                makerAddress: makerAddress,
+                makerAmount: MAKER_AMOUNT,
+                takerAmount: TAKER_AMOUNT,
+                usePermit2: true,
+                permit2Signature: "TO_BE_SIGNED",
+                permit2Witness: "TO_BE_CALCULATED",
+                permit2WitnessType: CONSIDERATION_TYPE_STRING
+            },
+            privateKey: EXAMPLE_PRIVATE_KEY,
+            permit2DomainSeparator: PERMIT2_DOMAIN_SEPARATORS[42161],
+            consideration: {
+                token: MAKER_ASSET,
+                amount: MAKER_AMOUNT,
+                counterparty: "0x1111111111111111111111111111111111111111"
+            },
+            _note: "permit2Witness will be calculated from Consideration struct"
+        }
+    };
+}
+
+/**
+ * Calculate ExampleWitness hash
+ */
+function calculateExampleWitness(user) {
+    const EXAMPLE_WITNESS_TYPEHASH = ethers.keccak256(ethers.toUtf8Bytes("ExampleWitness(address user)"));
+    const encodedWitness = ethers.AbiCoder.defaultAbiCoder().encode(
+        ["bytes32", "address"],
+        [EXAMPLE_WITNESS_TYPEHASH, user]
+    );
+    return ethers.keccak256(encodedWitness);
+}
+
+/**
+ * Calculate Consideration witness hash
+ */
+function calculateConsiderationWitness(consideration) {
+    const CONSIDERATION_TYPEHASH = ethers.keccak256(ethers.toUtf8Bytes("Consideration(address token,uint256 amount,address counterparty)"));
+    const encodedWitness = ethers.AbiCoder.defaultAbiCoder().encode(
+        ["bytes32", "address", "uint256", "address"],
+        [CONSIDERATION_TYPEHASH, consideration.token, consideration.amount, consideration.counterparty]
+    );
+    return ethers.keccak256(encodedWitness);
+}
 
 /**
  * Calculate the domain separator
@@ -74,7 +233,7 @@ function calculateStructHash(order) {
     
     // Ensure permit2Signature is properly formatted
     let permit2SigBytes = order.permit2Signature;
-    if (!permit2SigBytes || permit2SigBytes === "0x" || permit2SigBytes === "") {
+    if (!permit2SigBytes || permit2SigBytes === "0x" || permit2SigBytes === "" || permit2SigBytes === "TO_BE_SIGNED") {
         permit2SigBytes = "0x";
     }
     
@@ -235,10 +394,48 @@ function parseSignature(signature) {
 }
 
 /**
+ * Process input and auto-fill makerAddress if needed
+ */
+function processInput(input) {
+    const processed = JSON.parse(JSON.stringify(input));
+    
+    // Auto-derive makerAddress from privateKey
+    if (processed.privateKey) {
+        const derivedAddress = getMakerAddress(processed.privateKey);
+        if (!processed.order.makerAddress || 
+            processed.order.makerAddress === "0x0000000000000000000000000000000000000000" ||
+            processed.order.makerAddress === "") {
+            processed.order.makerAddress = derivedAddress;
+        }
+    }
+    
+    // Auto-fill verifyingContract based on chainId
+    if (!processed.verifyingContract && processed.chainId && DEPLOYED_CONTRACTS[processed.chainId]) {
+        processed.verifyingContract = DEPLOYED_CONTRACTS[processed.chainId];
+    }
+    
+    // Handle witness calculation for order3/order4 style inputs
+    if (processed.order.permit2Witness === "TO_BE_CALCULATED") {
+        if (processed.order.permit2WitnessType === EXAMPLE_WITNESS_TYPE_STRING && processed.exampleWitness) {
+            // ExampleWitness - use provided struct
+            processed.order.permit2Witness = calculateExampleWitness(processed.exampleWitness.user);
+        } else if (processed.order.permit2WitnessType === CONSIDERATION_TYPE_STRING && processed.consideration) {
+            // Consideration witness
+            processed.order.permit2Witness = calculateConsiderationWitness(processed.consideration);
+        }
+    }
+    
+    return processed;
+}
+
+/**
  * Main function to generate all signature data
  */
-function generateSignatureData(input) {
-    const { chainId, verifyingContract, order, privateKey, permit2DomainSeparator } = input;
+function generateSignatureData(rawInput) {
+    // Process input (auto-fill makerAddress, verifyingContract, witness)
+    const input = processInput(rawInput);
+    
+    const { chainId, verifyingContract, order, privateKey, permit2DomainSeparator, consideration } = input;
     
     // Calculate domain separator
     const { domainTypeHash, domainSeparator } = calculateDomainSeparator(chainId, verifyingContract);
@@ -255,6 +452,21 @@ function generateSignatureData(input) {
     // Recover address for verification
     const recoveredAddress = recoverAddress(digest, signature);
     
+    // Build the full order with auto-filled values
+    const fullOrder = {
+        rfqId: order.rfqId,
+        expiry: order.expiry,
+        makerAsset: order.makerAsset,
+        takerAsset: order.takerAsset,
+        makerAddress: order.makerAddress,
+        makerAmount: order.makerAmount,
+        takerAmount: order.takerAmount,
+        usePermit2: order.usePermit2,
+        permit2Signature: order.permit2Signature,
+        permit2Witness: order.permit2Witness,
+        permit2WitnessType: order.permit2WitnessType
+    };
+    
     // Permit2 data
     let permit2Data = {
         witness: order.permit2Witness,
@@ -265,10 +477,9 @@ function generateSignatureData(input) {
         sigV: "-"
     };
     
-    // If usePermit2 and we're in sign mode with valid witnessType
-    const permit2Mode = document.querySelector('input[name="permit2Mode"]:checked')?.value || "sign";
-    
-    if (order.usePermit2 && permit2Mode === "sign" && order.permit2WitnessType && permit2DomainSeparator && permit2DomainSeparator !== "0x0000000000000000000000000000000000000000000000000000000000000000") {
+    // Sign Permit2 if usePermit2 with valid witnessType
+    if (order.usePermit2 && order.permit2WitnessType && permit2DomainSeparator && 
+        permit2DomainSeparator !== "0x0000000000000000000000000000000000000000000000000000000000000000") {
         try {
             const permit2Result = signPermit2WithWitness({
                 permit: {
@@ -290,18 +501,19 @@ function generateSignatureData(input) {
             permit2Data.sigR = permit2Result.r;
             permit2Data.sigS = permit2Result.s;
             permit2Data.sigV = permit2Result.v;
+            
+            // Update fullOrder with signed permit2Signature
+            fullOrder.permit2Signature = permit2Result.signature;
         } catch (e) {
             console.error("Permit2 signing error:", e);
         }
-    } else if (permit2Mode === "debug" && order.permit2Signature && order.permit2Signature !== "0x") {
-        // Debug mode - parse existing signature
-        const parsed = parseSignature(order.permit2Signature);
-        permit2Data.sigR = parsed.r;
-        permit2Data.sigS = parsed.s;
-        permit2Data.sigV = parsed.v;
     }
     
     return {
+        // Full order (first in output)
+        fullOrder,
+        fullOrderJson: JSON.stringify(fullOrder, null, 2),
+        
         // Main outputs in checklist order
         structData,
         structHash,
@@ -324,7 +536,9 @@ function generateSignatureData(input) {
         typeHash,
         domainTypeHash,
         signerAddress,
-        recoveredAddress
+        recoveredAddress,
+        chainName: CHAIN_NAMES[chainId] || `Chain ${chainId}`,
+        verifyingContract
     };
 }
 
@@ -334,6 +548,9 @@ function generateSignatureData(input) {
 function updateUI(results) {
     // Hide error
     document.getElementById("errorDisplay").classList.add("hidden");
+    
+    // Full order output
+    document.getElementById("fullOrderOutput").textContent = results.fullOrderJson;
     
     // Main outputs
     document.getElementById("structDataOutput").textContent = results.structData;
@@ -360,6 +577,8 @@ function updateUI(results) {
     document.getElementById("domainTypeHashOutput").textContent = results.domainTypeHash;
     document.getElementById("signerAddressOutput").textContent = results.signerAddress;
     document.getElementById("recoveredAddressOutput").textContent = results.recoveredAddress;
+    document.getElementById("chainNameOutput").textContent = results.chainName;
+    document.getElementById("contractAddressOutput").textContent = results.verifyingContract;
 }
 
 /**
@@ -376,15 +595,18 @@ function showError(message) {
  */
 function clearOutputs() {
     const outputs = [
+        "fullOrderOutput",
         "structDataOutput", "structHashOutput", "domainSeparatorOutput",
         "digestOutput", "signatureOutput", "sigR", "sigS", "sigV",
         "permit2WitnessOutput", "permit2WitnessTypeOutput", "permit2SignatureOutput",
         "permit2SigR", "permit2SigS", "permit2SigV",
-        "typeHashOutput", "domainTypeHashOutput", "signerAddressOutput", "recoveredAddressOutput"
+        "typeHashOutput", "domainTypeHashOutput", "signerAddressOutput", "recoveredAddressOutput",
+        "chainNameOutput", "contractAddressOutput"
     ];
     
     outputs.forEach(id => {
-        document.getElementById(id).textContent = "-";
+        const el = document.getElementById(id);
+        if (el) el.textContent = "-";
     });
     
     document.getElementById("errorDisplay").classList.add("hidden");
@@ -421,6 +643,8 @@ async function copyToClipboard(text) {
 
 // Event listeners
 document.addEventListener("DOMContentLoaded", () => {
+    const examples = getExampleOrders();
+    
     // Generate button
     document.getElementById("generateBtn").addEventListener("click", () => {
         try {
@@ -434,7 +658,6 @@ document.addEventListener("DOMContentLoaded", () => {
             
             // Validate required fields
             if (!input.chainId) throw new Error("Missing chainId");
-            if (!input.verifyingContract) throw new Error("Missing verifyingContract");
             if (!input.order) throw new Error("Missing order object");
             if (!input.privateKey) throw new Error("Missing privateKey");
             
@@ -446,9 +669,21 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
     
-    // Load example button
-    document.getElementById("loadExampleBtn").addEventListener("click", () => {
-        document.getElementById("jsonInput").value = JSON.stringify(EXAMPLE_ORDER, null, 2);
+    // Example buttons
+    document.getElementById("loadExample1Btn").addEventListener("click", () => {
+        document.getElementById("jsonInput").value = JSON.stringify(examples.order1, null, 2);
+    });
+    
+    document.getElementById("loadExample2Btn").addEventListener("click", () => {
+        document.getElementById("jsonInput").value = JSON.stringify(examples.order2, null, 2);
+    });
+    
+    document.getElementById("loadExample3Btn").addEventListener("click", () => {
+        document.getElementById("jsonInput").value = JSON.stringify(examples.order3, null, 2);
+    });
+    
+    document.getElementById("loadExample4Btn").addEventListener("click", () => {
+        document.getElementById("jsonInput").value = JSON.stringify(examples.order4, null, 2);
     });
     
     // Clear button
@@ -477,3 +712,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // Make toggleCollapsible globally available
 window.toggleCollapsible = toggleCollapsible;
+
+// Export for testing
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        calculateDomainSeparator,
+        calculateStructHash,
+        calculateDigest,
+        signDigest,
+        generateSignatureData,
+        getExampleOrders,
+        DEPLOYED_CONTRACTS,
+        CHAIN_NAMES
+    };
+}
