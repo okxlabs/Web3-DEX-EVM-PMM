@@ -40,9 +40,12 @@ const CHAIN_NAMES = {
     56: "BNB Chain"
 };
 
-// Permit2 domain separators (can be computed or looked up)
+// Permit2 domain separators (Permit2 address: 0x000000000022D473030F116dDEE9F6B43aC78BA3)
 const PERMIT2_DOMAIN_SEPARATORS = {
-    42161: "0x8a6e6e19bdfb3db3409910416b47c2f8fc28b49488d6555c7fceaa4479135bc3"  // Arbitrum
+    1: "0x866a5aba21966af95d6c7ab78eb2b2fc913915c28be3b9aa07cc04ff903e3f28",      // Ethereum Mainnet
+    42161: "0x8a6e6e19bdfb3db3409910416b47c2f8fc28b49488d6555c7fceaa4479135bc3",  // Arbitrum One
+    8453: "0x3b6f35e4fce979ef8eac3bcdc8c3fc38fe7911bb0c69c8fe72bf1fd1a17e6f07",   // Base
+    56: "0x4142cc3c823f819c467fa4437d637fe20589a31dfcd1da2ff22292c9ed9344e7"      // BNB Chain
 };
 
 // Witness type strings (for reference)
