@@ -45,9 +45,67 @@ const PERMIT2_DOMAIN_SEPARATORS = {
     42161: "0x8a6e6e19bdfb3db3409910416b47c2f8fc28b49488d6555c7fceaa4479135bc3"  // Arbitrum
 };
 
-// Witness type strings
+// Witness type strings (for reference)
 const EXAMPLE_WITNESS_TYPE_STRING = "ExampleWitness witness)ExampleWitness(address user)TokenPermissions(address token,uint256 amount)";
 const CONSIDERATION_TYPE_STRING = "Consideration witness)Consideration(address token,uint256 amount,address counterparty)TokenPermissions(address token,uint256 amount)";
+
+/**
+ * Generate permit2WitnessType string from witness struct definition
+ * 
+ * EIP-712 Standard requires:
+ * 1. Main struct field declaration: "{StructName} witness)"
+ * 2. All struct definitions in ALPHABETICAL order
+ * 
+ * Format: "{StructName} witness){StructDef1}{StructDef2}..." (alphabetically sorted)
+ * 
+ * For Permit2, we always need TokenPermissions(address token,uint256 amount)
+ */
+function generatePermit2WitnessType(witnessStruct) {
+    const { name, fields } = witnessStruct;
+    
+    // Build witness struct definition: "StructName(type1 name1,type2 name2,...)"
+    const fieldList = fields.map(f => `${f.type} ${f.name}`).join(",");
+    const witnessStructDef = `${name}(${fieldList})`;
+    
+    // TokenPermissions is always required for Permit2
+    const tokenPermissionsDef = "TokenPermissions(address token,uint256 amount)";
+    
+    // Collect all struct definitions (witness struct + TokenPermissions)
+    const structDefs = [witnessStructDef, tokenPermissionsDef];
+    
+    // Sort alphabetically per EIP-712 standard
+    structDefs.sort();
+    
+    // Format: "{Name} witness){sorted struct definitions}"
+    return `${name} witness)${structDefs.join("")}`;
+}
+
+/**
+ * Calculate witness hash from witness struct definition and values
+ */
+function calculateWitnessFromStruct(witnessStruct) {
+    const { name, fields, values } = witnessStruct;
+    
+    // Build the struct type string: "{Name}({type1} {name1},{type2} {name2},...)"
+    const fieldList = fields.map(f => `${f.type} ${f.name}`).join(",");
+    const structTypeString = `${name}(${fieldList})`;
+    
+    // Calculate typehash
+    const typeHash = ethers.keccak256(ethers.toUtf8Bytes(structTypeString));
+    
+    // Build encoding types and values
+    const encodeTypes = ["bytes32"];
+    const encodeValues = [typeHash];
+    
+    for (const field of fields) {
+        encodeTypes.push(field.type);
+        encodeValues.push(values[field.name]);
+    }
+    
+    // Encode and hash
+    const encoded = ethers.AbiCoder.defaultAbiCoder().encode(encodeTypes, encodeValues);
+    return ethers.keccak256(encoded);
+}
 
 // Get current timestamp + 30 days for expiry
 function getDefaultExpiry() {
@@ -128,6 +186,8 @@ function getExampleOrders() {
         },
         
         // Order 3: usePermit2: true, with ExampleWitness
+        // Generated permit2WitnessType (EIP-712 alphabetical order: E < T):
+        // "ExampleWitness witness)ExampleWitness(address user)TokenPermissions(address token,uint256 amount)"
         order3: {
             chainId: 42161,
             verifyingContract: DEPLOYED_CONTRACTS[42161],
@@ -142,17 +202,25 @@ function getExampleOrders() {
                 usePermit2: true,
                 permit2Signature: "TO_BE_SIGNED",
                 permit2Witness: "TO_BE_CALCULATED",
-                permit2WitnessType: EXAMPLE_WITNESS_TYPE_STRING
+                permit2WitnessType: "TO_BE_GENERATED"
             },
             privateKey: EXAMPLE_PRIVATE_KEY,
             permit2DomainSeparator: PERMIT2_DOMAIN_SEPARATORS[42161],
-            exampleWitness: {
-                user: makerAddress
+            witnessStruct: {
+                name: "ExampleWitness",
+                fields: [
+                    { type: "address", name: "user" }
+                ],
+                values: {
+                    user: makerAddress
+                }
             },
-            _note: "permit2Witness will be calculated from ExampleWitness struct"
+            _expectedWitnessType: "ExampleWitness witness)ExampleWitness(address user)TokenPermissions(address token,uint256 amount)"
         },
         
         // Order 4: usePermit2: true, with Consideration witness
+        // Generated permit2WitnessType (EIP-712 alphabetical order: C < T):
+        // "Consideration witness)Consideration(address token,uint256 amount,address counterparty)TokenPermissions(address token,uint256 amount)"
         order4: {
             chainId: 42161,
             verifyingContract: DEPLOYED_CONTRACTS[42161],
@@ -167,16 +235,24 @@ function getExampleOrders() {
                 usePermit2: true,
                 permit2Signature: "TO_BE_SIGNED",
                 permit2Witness: "TO_BE_CALCULATED",
-                permit2WitnessType: CONSIDERATION_TYPE_STRING
+                permit2WitnessType: "TO_BE_GENERATED"
             },
             privateKey: EXAMPLE_PRIVATE_KEY,
             permit2DomainSeparator: PERMIT2_DOMAIN_SEPARATORS[42161],
-            consideration: {
-                token: MAKER_ASSET,
-                amount: MAKER_AMOUNT,
-                counterparty: "0x1111111111111111111111111111111111111111"
+            witnessStruct: {
+                name: "Consideration",
+                fields: [
+                    { type: "address", name: "token" },
+                    { type: "uint256", name: "amount" },
+                    { type: "address", name: "counterparty" }
+                ],
+                values: {
+                    token: MAKER_ASSET,
+                    amount: MAKER_AMOUNT,
+                    counterparty: "0x1111111111111111111111111111111111111111"
+                }
             },
-            _note: "permit2Witness will be calculated from Consideration struct"
+            _expectedWitnessType: "Consideration witness)Consideration(address token,uint256 amount,address counterparty)TokenPermissions(address token,uint256 amount)"
         }
     };
 }
@@ -414,14 +490,32 @@ function processInput(input) {
         processed.verifyingContract = DEPLOYED_CONTRACTS[processed.chainId];
     }
     
-    // Handle witness calculation for order3/order4 style inputs
+    // Handle witness calculation from witnessStruct
+    if (processed.witnessStruct) {
+        // Generate permit2WitnessType from struct definition
+        if (processed.order.permit2WitnessType === "TO_BE_GENERATED" || !processed.order.permit2WitnessType) {
+            processed.order.permit2WitnessType = generatePermit2WitnessType(processed.witnessStruct);
+        }
+        
+        // Calculate permit2Witness from struct
+        if (processed.order.permit2Witness === "TO_BE_CALCULATED" || !processed.order.permit2Witness || 
+            processed.order.permit2Witness === "0x0000000000000000000000000000000000000000000000000000000000000000") {
+            processed.order.permit2Witness = calculateWitnessFromStruct(processed.witnessStruct);
+        }
+    }
+    
+    // Legacy support: handle old exampleWitness/consideration format
     if (processed.order.permit2Witness === "TO_BE_CALCULATED") {
-        if (processed.order.permit2WitnessType === EXAMPLE_WITNESS_TYPE_STRING && processed.exampleWitness) {
-            // ExampleWitness - use provided struct
+        if (processed.exampleWitness) {
             processed.order.permit2Witness = calculateExampleWitness(processed.exampleWitness.user);
-        } else if (processed.order.permit2WitnessType === CONSIDERATION_TYPE_STRING && processed.consideration) {
-            // Consideration witness
+            if (!processed.order.permit2WitnessType || processed.order.permit2WitnessType === "TO_BE_GENERATED") {
+                processed.order.permit2WitnessType = EXAMPLE_WITNESS_TYPE_STRING;
+            }
+        } else if (processed.consideration) {
             processed.order.permit2Witness = calculateConsiderationWitness(processed.consideration);
+            if (!processed.order.permit2WitnessType || processed.order.permit2WitnessType === "TO_BE_GENERATED") {
+                processed.order.permit2WitnessType = CONSIDERATION_TYPE_STRING;
+            }
         }
     }
     
@@ -669,21 +763,28 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
     
+    // Helper to clean example for display (remove internal fields like _expectedWitnessType)
+    function cleanExampleForDisplay(example) {
+        const clean = JSON.parse(JSON.stringify(example));
+        delete clean._expectedWitnessType;
+        return clean;
+    }
+    
     // Example buttons
     document.getElementById("loadExample1Btn").addEventListener("click", () => {
-        document.getElementById("jsonInput").value = JSON.stringify(examples.order1, null, 2);
+        document.getElementById("jsonInput").value = JSON.stringify(cleanExampleForDisplay(examples.order1), null, 2);
     });
     
     document.getElementById("loadExample2Btn").addEventListener("click", () => {
-        document.getElementById("jsonInput").value = JSON.stringify(examples.order2, null, 2);
+        document.getElementById("jsonInput").value = JSON.stringify(cleanExampleForDisplay(examples.order2), null, 2);
     });
     
     document.getElementById("loadExample3Btn").addEventListener("click", () => {
-        document.getElementById("jsonInput").value = JSON.stringify(examples.order3, null, 2);
+        document.getElementById("jsonInput").value = JSON.stringify(cleanExampleForDisplay(examples.order3), null, 2);
     });
     
     document.getElementById("loadExample4Btn").addEventListener("click", () => {
-        document.getElementById("jsonInput").value = JSON.stringify(examples.order4, null, 2);
+        document.getElementById("jsonInput").value = JSON.stringify(cleanExampleForDisplay(examples.order4), null, 2);
     });
     
     // Clear button

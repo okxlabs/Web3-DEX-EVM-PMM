@@ -27,20 +27,29 @@
   "order": {
     "rfqId": "123456",
     "expiry": 1234567890,
-    "makerAsset": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
-    "takerAsset": "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
+    "makerAsset": "0x...",
+    "takerAsset": "0x...",
     "makerAddress": "auto from privateKey",
     "makerAmount": "100",
     "takerAmount": "90",
     "usePermit2": true,
     "permit2Signature": "TO_BE_SIGNED",
     "permit2Witness": "TO_BE_CALCULATED",
-    "permit2WitnessType": "ExampleWitness witness)..."
+    "permit2WitnessType": "TO_BE_GENERATED"
   },
   "privateKey": "0x...",
   "permit2DomainSeparator": "0x8a6e6e19...",
-  "exampleWitness": { "user": "0x..." },
-  "consideration": { "token": "0x...", "amount": "100", "counterparty": "0x..." }
+  "witnessStruct": {
+    "name": "YourWitness",
+    "fields": [
+      { "type": "address", "name": "user" },
+      { "type": "uint256", "name": "amount" }
+    ],
+    "values": {
+      "user": "0x...",
+      "amount": "100"
+    }
+  }
 }'></textarea>
                 </div>
 
@@ -51,27 +60,41 @@
                 </div>
                 
                 <div class="example-section">
-                    <label>Load Example (from testSignOrder.js)</label>
+                    <label>Load Example</label>
                     <div class="example-buttons">
-                        <button id="loadExample1Btn" class="btn btn-example">Order 1<br><small>No Permit2</small></button>
-                        <button id="loadExample2Btn" class="btn btn-example">Order 2<br><small>Permit2, No Witness</small></button>
-                        <button id="loadExample3Btn" class="btn btn-example">Order 3<br><small>ExampleWitness</small></button>
-                        <button id="loadExample4Btn" class="btn btn-example">Order 4<br><small>Consideration</small></button>
+                        <button id="loadExample1Btn" class="btn btn-example">Order 1<br><small>usePermit2: false</small></button>
+                        <button id="loadExample2Btn" class="btn btn-example">Order 2<br><small>usePermit2: true, no witness</small></button>
+                        <button id="loadExample3Btn" class="btn btn-example">Order 3<br><small>witnessStruct: ExampleWitness</small></button>
+                        <button id="loadExample4Btn" class="btn btn-example">Order 4<br><small>witnessStruct: Consideration</small></button>
                     </div>
                 </div>
                 
                 <div class="info-box">
                     <h4>Auto-fill Features</h4>
                     <ul>
-                        <li><strong>verifyingContract</strong>: Auto-filled from chainId (Ethereum, Arbitrum, Base, BNB)</li>
+                        <li><strong>verifyingContract</strong>: Auto-filled from chainId</li>
                         <li><strong>makerAddress</strong>: Auto-derived from privateKey</li>
-                        <li><strong>permit2Witness</strong>: Auto-calculated from witness structs:
-                            <ul>
-                                <li><code>exampleWitness: { user }</code></li>
-                                <li><code>consideration: { token, amount, counterparty }</code></li>
-                            </ul>
-                        </li>
+                        <li><strong>permit2WitnessType</strong>: Auto-generated from <code>witnessStruct</code> (EIP-712 alphabetical order)</li>
+                        <li><strong>permit2Witness</strong>: Auto-calculated from <code>witnessStruct</code></li>
                     </ul>
+                    <h4>witnessStruct Format (Order 3/4)</h4>
+                    <pre class="code-example">// ExampleWitness(address user)
+"witnessStruct": {
+  "name": "ExampleWitness",
+  "fields": [{ "type": "address", "name": "user" }],
+  "values": { "user": "0x..." }
+}
+
+// Consideration(address token, uint256 amount, address counterparty)
+"witnessStruct": {
+  "name": "Consideration",
+  "fields": [
+    { "type": "address", "name": "token" },
+    { "type": "uint256", "name": "amount" },
+    { "type": "address", "name": "counterparty" }
+  ],
+  "values": { "token": "0x...", "amount": "100", "counterparty": "0x..." }
+}</pre>
                 </div>
             </section>
 
@@ -238,6 +261,6 @@
         </footer>
     </div>
 
-    <script src="app.js"></script>
+    <script src="app.js?v=2"></script>
 </body>
 </html>

@@ -321,6 +321,24 @@ textarea::placeholder {
     color: var(--accent-orange);
 }
 
+.info-box h4:not(:first-child) {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+}
+
+.info-box .code-example {
+    background-color: var(--bg-primary);
+    padding: 10px;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--accent-green);
+    margin-top: 8px;
+    overflow-x: auto;
+    white-space: pre;
+}
+
 /* Output Panel */
 .output-panel {
     max-height: calc(100vh - 200px);
