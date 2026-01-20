@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EIP-712 Signature Debug Tool - PMM Protocol</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.9.0/ethers.umd.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>EIP-712 Signature Debug Tool</h1>
+            <p class="subtitle">OnChain Labs PMM Protocol</p>
+        </header>
+
+        <main>
+            <!-- Input Section -->
+            <section class="panel input-panel">
+                <h2>Input</h2>
+                
+                <div class="form-group">
+                    <label for="jsonInput">Order JSON</label>
+                    <textarea id="jsonInput" placeholder='{
+  "chainId": 1,
+  "verifyingContract": "0x...",
+  "order": {
+    "rfqId": "4262300009041366528",
+    "expiry": 1234567890,
+    "makerAsset": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+    "takerAsset": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+    "makerAddress": "0x...",
+    "makerAmount": "1000000000000000",
+    "takerAmount": "3198469",
+    "usePermit2": true,
+    "permit2Signature": "0x",
+    "permit2Witness": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "permit2WitnessType": ""
+  },
+  "privateKey": "0x...",
+  "permit2DomainSeparator": "0x..."
+}'></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label>Permit2 Mode</label>
+                    <div class="radio-group">
+                        <label class="radio-label">
+                            <input type="radio" name="permit2Mode" value="sign" checked>
+                            <span>Sign New Permit2</span>
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="permit2Mode" value="debug">
+                            <span>Debug Existing Signature</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="button-group">
+                    <button id="generateBtn" class="btn btn-primary">Generate Signature</button>
+                    <button id="loadExampleBtn" class="btn btn-secondary">Load Example</button>
+                    <button id="clearBtn" class="btn btn-secondary">Clear</button>
+                </div>
+            </section>
+
+            <!-- Output Section -->
+            <section class="panel output-panel">
+                <h2>Output</h2>
+                <p class="output-note">Verification order: structData → structHash → domainSeparator → digest → signature</p>
+
+                <div id="errorDisplay" class="error-display hidden"></div>
+
+                <!-- 1. Struct Data -->
+                <div class="output-group">
+                    <div class="output-header">
+                        <label>1. structData <span class="hint">(ABI-encoded before keccak)</span></label>
+                        <button class="copy-btn" data-target="structDataOutput">Copy</button>
+                    </div>
+                    <div id="structDataOutput" class="output-value mono">-</div>
+                </div>
+
+                <!-- 2. Struct Hash -->
+                <div class="output-group">
+                    <div class="output-header">
+                        <label>2. structHash <span class="hint">(bytes32)</span></label>
+                        <button class="copy-btn" data-target="structHashOutput">Copy</button>
+                    </div>
+                    <div id="structHashOutput" class="output-value mono">-</div>
+                </div>
+
+                <!-- 3. Domain Separator -->
+                <div class="output-group">
+                    <div class="output-header">
+                        <label>3. domainSeparator <span class="hint">(bytes32)</span></label>
+                        <button class="copy-btn" data-target="domainSeparatorOutput">Copy</button>
+                    </div>
+                    <div id="domainSeparatorOutput" class="output-value mono">-</div>
+                </div>
+
+                <!-- 4. Digest -->
+                <div class="output-group">
+                    <div class="output-header">
+                        <label>4. digest <span class="hint">(EIP-712 final hash)</span></label>
+                        <button class="copy-btn" data-target="digestOutput">Copy</button>
+                    </div>
+                    <div id="digestOutput" class="output-value mono">-</div>
+                </div>
+
+                <!-- 5. Signature -->
+                <div class="output-group">
+                    <div class="output-header">
+                        <label>5. signature <span class="hint">(65 bytes)</span></label>
+                        <button class="copy-btn" data-target="signatureOutput">Copy</button>
+                    </div>
+                    <div id="signatureOutput" class="output-value mono">-</div>
+                    <div class="signature-breakdown">
+                        <div class="sig-part">
+                            <span class="sig-label">r:</span>
+                            <span id="sigR" class="mono">-</span>
+                        </div>
+                        <div class="sig-part">
+                            <span class="sig-label">s:</span>
+                            <span id="sigS" class="mono">-</span>
+                        </div>
+                        <div class="sig-part">
+                            <span class="sig-label">v:</span>
+                            <span id="sigV" class="mono">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 6. Permit2 Section -->
+                <div class="output-group permit2-section">
+                    <h3>Permit2 Details</h3>
+                    
+                    <div class="output-subgroup">
+                        <div class="output-header">
+                            <label>permit2Witness <span class="hint">(bytes32)</span></label>
+                            <button class="copy-btn" data-target="permit2WitnessOutput">Copy</button>
+                        </div>
+                        <div id="permit2WitnessOutput" class="output-value mono">-</div>
+                    </div>
+
+                    <div class="output-subgroup">
+                        <div class="output-header">
+                            <label>permit2WitnessType <span class="hint">(string)</span></label>
+                            <button class="copy-btn" data-target="permit2WitnessTypeOutput">Copy</button>
+                        </div>
+                        <div id="permit2WitnessTypeOutput" class="output-value mono">-</div>
+                    </div>
+
+                    <div class="output-subgroup">
+                        <div class="output-header">
+                            <label>permit2Signature <span class="hint">(65 bytes)</span></label>
+                            <button class="copy-btn" data-target="permit2SignatureOutput">Copy</button>
+                        </div>
+                        <div id="permit2SignatureOutput" class="output-value mono">-</div>
+                        <div class="signature-breakdown">
+                            <div class="sig-part">
+                                <span class="sig-label">r:</span>
+                                <span id="permit2SigR" class="mono">-</span>
+                            </div>
+                            <div class="sig-part">
+                                <span class="sig-label">s:</span>
+                                <span id="permit2SigS" class="mono">-</span>
+                            </div>
+                            <div class="sig-part">
+                                <span class="sig-label">v:</span>
+                                <span id="permit2SigV" class="mono">-</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Additional Debug Info -->
+                <div class="output-group collapsible">
+                    <button class="collapsible-header" onclick="toggleCollapsible(this)">
+                        <span>Additional Debug Info</span>
+                        <span class="chevron">▼</span>
+                    </button>
+                    <div class="collapsible-content">
+                        <div class="output-subgroup">
+                            <label>Order TypeHash</label>
+                            <div id="typeHashOutput" class="output-value mono">-</div>
+                        </div>
+                        <div class="output-subgroup">
+                            <label>Domain TypeHash</label>
+                            <div id="domainTypeHashOutput" class="output-value mono">-</div>
+                        </div>
+                        <div class="output-subgroup">
+                            <label>Signer Address</label>
+                            <div id="signerAddressOutput" class="output-value mono">-</div>
+                        </div>
+                        <div class="output-subgroup">
+                            <label>Recovered Address</label>
+                            <div id="recoveredAddressOutput" class="output-value mono">-</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>OnChain Labs PMM Protocol - EIP-712 Debug Tool</p>
+            <p class="version">Contract Version: 1.0</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
