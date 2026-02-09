@@ -259,6 +259,23 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
             revert Errors.RFQ_SettlementAmountTooSmall(order.rfqId);
         }
 
+        // @dev Slippage mechanism: no slippage within confidenceT, after that taker receives less
+        // @dev If confidenceT or confidenceWeight is zero, slippage is disabled
+        {
+            uint256 confidenceT = order.confidenceT;
+            if (confidenceT != 0 && block.timestamp > confidenceT) {
+                uint256 confidenceWeight = order.confidenceWeight;
+                if (confidenceWeight != 0 && order.confidenceCap != 0) {
+                    uint256 timeDiff = block.timestamp - confidenceT;
+                    uint256 cutdownPercentageX6 = timeDiff * confidenceWeight;
+                    if (cutdownPercentageX6 > order.confidenceCap) {
+                        cutdownPercentageX6 = order.confidenceCap;
+                    }
+                    makerAmount = makerAmount - makerAmount * cutdownPercentageX6 / 1e6;
+                }
+            }
+        }
+
         bool needUnwrap = order.makerAsset == address(_WETH) && flagsAndAmount & _UNWRAP_WETH_FLAG != 0;
 
         // Maker => Taker
