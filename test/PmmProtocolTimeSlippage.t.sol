@@ -97,7 +97,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
     function testNoSlippageBeforeConfidenceT() public {
         uint256 confidenceT = block.timestamp + 30 minutes;
         OrderRFQLib.OrderRFQ memory order =
-            _orderWithConfidence(1, getFutureTimestamp(1 hours), confidenceT, 1000, 100_000);
+            _orderWithConfidence(1, getFutureTimestamp(1 hours), confidenceT, 1000, 50_000);
         bytes memory signature = _sign(order);
 
         // fill before confidenceT — taker should receive full makerAmount
@@ -115,7 +115,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
     function testNoSlippageExactlyAtConfidenceT() public {
         uint256 confidenceT = block.timestamp + 10 minutes;
         OrderRFQLib.OrderRFQ memory order =
-            _orderWithConfidence(2, getFutureTimestamp(1 hours), confidenceT, 1000, 100_000);
+            _orderWithConfidence(2, getFutureTimestamp(1 hours), confidenceT, 1000, 50_000);
         bytes memory signature = _sign(order);
 
         // warp to exactly confidenceT — condition is `block.timestamp > confidenceT`, so no slippage
@@ -133,7 +133,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
 
     function testNoSlippageWhenConfidenceTIsZero() public {
         OrderRFQLib.OrderRFQ memory order =
-            _orderWithConfidence(3, getFutureTimestamp(1 hours), 0, 1000, 100_000);
+            _orderWithConfidence(3, getFutureTimestamp(1 hours), 0, 1000, 50_000);
         bytes memory signature = _sign(order);
 
         vm.warp(block.timestamp + 30 minutes);
@@ -151,7 +151,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
     function testNoSlippageWhenWeightIsZero() public {
         uint256 confidenceT = block.timestamp + 10 minutes;
         OrderRFQLib.OrderRFQ memory order =
-            _orderWithConfidence(4, getFutureTimestamp(1 hours), confidenceT, 0, 100_000);
+            _orderWithConfidence(4, getFutureTimestamp(1 hours), confidenceT, 0, 50_000);
         bytes memory signature = _sign(order);
 
         vm.warp(confidenceT + 10 minutes);
@@ -191,24 +191,24 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
     function testSlippageAppliesAfterConfidenceT() public {
         uint256 confidenceT = block.timestamp + 10 minutes;
         uint256 weight = 1000; // 0.1% per second
-        uint256 cap = 100_000; // max 10% reduction
+        uint256 cap = 50_000; // max 5% reduction
 
         OrderRFQLib.OrderRFQ memory order =
             _orderWithConfidence(6, getFutureTimestamp(1 hours), confidenceT, weight, cap);
         bytes memory signature = _sign(order);
 
-        // warp 100 seconds past confidenceT
-        uint256 timePastConfidence = 100;
+        // warp 50 seconds past confidenceT
+        uint256 timePastConfidence = 50;
         vm.warp(confidenceT + timePastConfidence);
 
-        // cutdownPercentageX6 = 100 * 1000 = 100_000 (10%)
-        // expected makerAmount = 100e18 - 100e18 * 100_000 / 1e6 = 90e18
-        uint256 expectedMaker = MAKER_AMOUNT - MAKER_AMOUNT * 100_000 / 1e6;
+        // cutdownPercentageX6 = 50 * 1000 = 50_000 (5%)
+        // expected makerAmount = 100e18 - 100e18 * 50_000 / 1e6 = 95e18
+        uint256 expectedMaker = MAKER_AMOUNT - MAKER_AMOUNT * 50_000 / 1e6;
 
         vm.prank(taker);
         (uint256 makerFilled,,) = pmmProtocol.fillOrderRFQ(order, signature, 0);
 
-        assertEq(makerFilled, expectedMaker, "makerFilled should reflect 10% confidence slippage");
+        assertEq(makerFilled, expectedMaker, "makerFilled should reflect 5% confidence slippage");
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -218,33 +218,33 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
     function testSlippageIncreasesLinearly() public {
         uint256 confidenceT = block.timestamp + 10 minutes;
         uint256 weight = 500; // 0.05% per second
-        uint256 cap = 100_000; // max 10%
+        uint256 cap = 50_000; // max 5%
 
-        // Test at 100 seconds past: cutdown = 100 * 500 = 50_000 (5%)
+        // Test at 50 seconds past: cutdown = 50 * 500 = 25_000 (2.5%)
         OrderRFQLib.OrderRFQ memory order1 =
             _orderWithConfidence(7, getFutureTimestamp(2 hours), confidenceT, weight, cap);
         bytes memory sig1 = _sign(order1);
 
-        vm.warp(confidenceT + 100);
+        vm.warp(confidenceT + 50);
         vm.prank(taker);
         (uint256 makerFilled1,,) = pmmProtocol.fillOrderRFQ(order1, sig1, 0);
 
-        uint256 expected1 = MAKER_AMOUNT - MAKER_AMOUNT * 50_000 / 1e6; // 95e18
-        assertEq(makerFilled1, expected1, "5% slippage at t+100s");
+        uint256 expected1 = MAKER_AMOUNT - MAKER_AMOUNT * 25_000 / 1e6; // 97.5e18
+        assertEq(makerFilled1, expected1, "2.5% slippage at t+50s");
 
-        // Test at 200 seconds past: cutdown = 200 * 500 = 100_000 (10%)
+        // Test at 100 seconds past: cutdown = 100 * 500 = 50_000 (5%)
         OrderRFQLib.OrderRFQ memory order2 =
             _orderWithConfidence(8, getFutureTimestamp(2 hours), confidenceT, weight, cap);
         bytes memory sig2 = _sign(order2);
 
-        vm.warp(confidenceT + 200);
+        vm.warp(confidenceT + 100);
         vm.prank(taker);
         (uint256 makerFilled2,,) = pmmProtocol.fillOrderRFQ(order2, sig2, 0);
 
-        uint256 expected2 = MAKER_AMOUNT - MAKER_AMOUNT * 100_000 / 1e6; // 90e18
-        assertEq(makerFilled2, expected2, "10% slippage at t+200s");
+        uint256 expected2 = MAKER_AMOUNT - MAKER_AMOUNT * 50_000 / 1e6; // 95e18
+        assertEq(makerFilled2, expected2, "5% slippage at t+100s");
 
-        // Verify linear relationship: reduction at 200s is exactly 2x reduction at 100s
+        // Verify linear relationship: reduction at 100s is exactly 2x reduction at 50s
         uint256 reduction1 = MAKER_AMOUNT - makerFilled1;
         uint256 reduction2 = MAKER_AMOUNT - makerFilled2;
         assertEq(reduction2, reduction1 * 2, "slippage should scale linearly with time");
@@ -257,21 +257,21 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
     function testSlippageAppliedToPartialFill() public {
         uint256 confidenceT = block.timestamp + 10 minutes;
         uint256 weight = 1000;
-        uint256 cap = 100_000; // 10%
+        uint256 cap = 50_000; // 5%
 
         OrderRFQLib.OrderRFQ memory order =
             _orderWithConfidence(9, getFutureTimestamp(1 hours), confidenceT, weight, cap);
         bytes memory signature = _sign(order);
 
-        // warp 50 seconds past confidenceT: cutdown = 50 * 1000 = 50_000 (5%)
-        vm.warp(confidenceT + 50);
+        // warp 25 seconds past confidenceT: cutdown = 25 * 1000 = 25_000 (2.5%)
+        vm.warp(confidenceT + 25);
 
         // partial fill: 80% of makerAmount
         uint256 partialMaker = MAKER_AMOUNT * 8 / 10; // 80e18
         uint256 flagsAndAmount = MAKER_AMOUNT_FLAG | partialMaker;
 
-        // confidence applied to the partial amount: 80e18 - 80e18 * 50_000 / 1e6 = 76e18
-        uint256 expectedMaker = partialMaker - partialMaker * 50_000 / 1e6;
+        // confidence applied to the partial amount: 80e18 - 80e18 * 25_000 / 1e6 = 78e18
+        uint256 expectedMaker = partialMaker - partialMaker * 25_000 / 1e6;
 
         vm.prank(taker);
         (uint256 makerFilled,,) = pmmProtocol.fillOrderRFQ(order, signature, flagsAndAmount);
@@ -286,7 +286,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
     function testTakerAmountUnaffectedByConfidence() public {
         uint256 confidenceT = block.timestamp + 10 minutes;
         uint256 weight = 1000;
-        uint256 cap = 100_000;
+        uint256 cap = 50_000;
 
         OrderRFQLib.OrderRFQ memory order =
             _orderWithConfidence(10, getFutureTimestamp(1 hours), confidenceT, weight, cap);
@@ -315,21 +315,21 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
     function testBalancesAfterConfidenceSlippage() public {
         uint256 confidenceT = block.timestamp + 10 minutes;
         uint256 weight = 2000; // 0.2% per second
-        uint256 cap = 100_000; // max 10%
+        uint256 cap = 50_000; // max 5%
 
         OrderRFQLib.OrderRFQ memory order =
             _orderWithConfidence(11, getFutureTimestamp(1 hours), confidenceT, weight, cap);
         bytes memory signature = _sign(order);
 
-        // warp 50 seconds past: cutdown = 50 * 2000 = 100_000 (10%)
-        vm.warp(confidenceT + 50);
+        // warp 25 seconds past: cutdown = 25 * 2000 = 50_000 (5%)
+        vm.warp(confidenceT + 25);
 
         uint256 makerBalBefore = makerToken.balanceOf(maker);
         uint256 takerMakerBalBefore = makerToken.balanceOf(taker);
         uint256 takerBalBefore = takerToken.balanceOf(taker);
         uint256 makerTakerBalBefore = takerToken.balanceOf(maker);
 
-        uint256 expectedMakerFilled = MAKER_AMOUNT - MAKER_AMOUNT * 100_000 / 1e6; // 90e18
+        uint256 expectedMakerFilled = MAKER_AMOUNT - MAKER_AMOUNT * 50_000 / 1e6; // 95e18
 
         vm.prank(taker);
         pmmProtocol.fillOrderRFQ(order, signature, 0);
@@ -355,47 +355,47 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
     function testSlippageCappedAtConfidenceCap() public {
         uint256 confidenceT = block.timestamp + 10 minutes;
         uint256 weight = 10_000; // 1% per second (aggressive)
-        uint256 cap = 100_000; // max 10%
+        uint256 cap = 50_000; // max 5%
 
         OrderRFQLib.OrderRFQ memory order =
             _orderWithConfidence(12, getFutureTimestamp(2 hours), confidenceT, weight, cap);
         bytes memory signature = _sign(order);
 
         // warp 1000 seconds past: uncapped cutdown = 1000 * 10_000 = 10_000_000 (1000%)
-        // but capped at 100_000 (10%)
+        // but capped at 50_000 (5%)
         vm.warp(confidenceT + 1000);
 
-        uint256 expectedMaker = MAKER_AMOUNT - MAKER_AMOUNT * cap / 1e6; // 90e18
+        uint256 expectedMaker = MAKER_AMOUNT - MAKER_AMOUNT * cap / 1e6; // 95e18
 
         vm.prank(taker);
         (uint256 makerFilled,,) = pmmProtocol.fillOrderRFQ(order, signature, 0);
 
-        assertEq(makerFilled, expectedMaker, "slippage should be capped at 10%");
+        assertEq(makerFilled, expectedMaker, "slippage should be capped at 5%");
     }
 
     // ─────────────────────────────────────────────────────────────────
-    //  12. Max cap (10%) limits reduction even with aggressive weight
+    //  12. Max cap (5%) limits reduction even with aggressive weight
     // ─────────────────────────────────────────────────────────────────
 
     function testMaxCapLimitsReduction() public {
         uint256 confidenceT = block.timestamp + 10 minutes;
         uint256 weight = 10_000;
-        uint256 cap = 100_000; // 10% — max allowed reduction
+        uint256 cap = 50_000; // 5% — max allowed reduction
 
         OrderRFQLib.OrderRFQ memory order =
             _orderWithConfidence(13, getFutureTimestamp(2 hours), confidenceT, weight, cap);
         bytes memory signature = _sign(order);
 
         // warp far enough that uncapped cutdown far exceeds cap
-        vm.warp(confidenceT + 200); // 200 * 10_000 = 2_000_000 > cap, capped at 100_000
+        vm.warp(confidenceT + 200); // 200 * 10_000 = 2_000_000 > cap, capped at 50_000
 
-        // makerAmount = 100e18 - 100e18 * 100_000 / 1e6 = 90e18
+        // makerAmount = 100e18 - 100e18 * 50_000 / 1e6 = 95e18
         uint256 expectedMaker = MAKER_AMOUNT - MAKER_AMOUNT * cap / 1e6;
 
         vm.prank(taker);
         (uint256 makerFilled,,) = pmmProtocol.fillOrderRFQ(order, signature, 0);
 
-        assertEq(makerFilled, expectedMaker, "10% confidence cap should limit reduction to 10%");
+        assertEq(makerFilled, expectedMaker, "5% confidence cap should limit reduction to 5%");
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -405,22 +405,22 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
     function testSettleLimitPassesBeforeConfidenceReducesAmount() public {
         uint256 confidenceT = block.timestamp + 10 minutes;
         uint256 weight = 10_000; // 1% per second
-        uint256 cap = 100_000; // max 10%
+        uint256 cap = 50_000; // max 5%
 
         OrderRFQLib.OrderRFQ memory order =
             _orderWithConfidence(14, getFutureTimestamp(2 hours), confidenceT, weight, cap);
         bytes memory signature = _sign(order);
 
-        // warp far past confidenceT so cap (10%) is reached
+        // warp far past confidenceT so cap (5%) is reached
         vm.warp(confidenceT + 1000);
 
         // Full fill: makerAmount = 100e18 passes settle limit (100e18 >= 60e18)
-        // After confidence 10%: actual makerFilled = 90e18
+        // After confidence 5%: actual makerFilled = 95e18
         // This succeeds because settle limit is checked BEFORE confidence
         vm.prank(taker);
         (uint256 makerFilled,,) = pmmProtocol.fillOrderRFQ(order, signature, 0);
 
-        uint256 expectedMaker = MAKER_AMOUNT - MAKER_AMOUNT * cap / 1e6; // 90e18
+        uint256 expectedMaker = MAKER_AMOUNT - MAKER_AMOUNT * cap / 1e6; // 95e18
         assertEq(makerFilled, expectedMaker, "settle limit does not block post-confidence amount");
     }
 
@@ -431,7 +431,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
     function testSlippageWithPermit2WitnessTransfer() public {
         uint256 confidenceT = block.timestamp + 10 minutes;
         uint256 weight = 1000; // 0.1% per second
-        uint256 cap = 100_000; // max 10%
+        uint256 cap = 50_000; // max 5%
 
         // Maker approves makerToken to Permit2 (instead of directly to pmmProtocol)
         vm.prank(maker);
@@ -480,10 +480,10 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
         // Sign order
         bytes memory orderSignature = _sign(order);
 
-        // Warp 100 seconds past confidenceT: cutdown = 100 * 1000 = 100_000 (10%)
-        vm.warp(confidenceT + 100);
+        // Warp 50 seconds past confidenceT: cutdown = 50 * 1000 = 50_000 (5%)
+        vm.warp(confidenceT + 50);
 
-        uint256 expectedMaker = MAKER_AMOUNT - MAKER_AMOUNT * 100_000 / 1e6; // 90e18
+        uint256 expectedMaker = MAKER_AMOUNT - MAKER_AMOUNT * 50_000 / 1e6; // 95e18
 
         uint256 makerBalBefore = makerToken.balanceOf(maker);
         uint256 takerMakerBalBefore = makerToken.balanceOf(taker);
@@ -494,7 +494,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
         (uint256 makerFilled, uint256 takerFilled,) = pmmProtocol.fillOrderRFQ(order, orderSignature, 0);
 
         // Verify slippage applied correctly through Permit2 witness path
-        assertEq(makerFilled, expectedMaker, "makerFilled should reflect 10% slippage via permit2 witness");
+        assertEq(makerFilled, expectedMaker, "makerFilled should reflect 5% slippage via permit2 witness");
         assertEq(takerFilled, TAKER_AMOUNT, "takerFilled should be full amount");
 
         // Verify actual token balances
@@ -504,17 +504,17 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
     }
 
     // ═════════════════════════════════════════════════════════════════
-    //  CONFIDENCE CAP LIMIT (10%)
+    //  CONFIDENCE CAP LIMIT (5%)
     // ═════════════════════════════════════════════════════════════════
 
     // ─────────────────────────────────────────────────────────────────
-    //  15. Revert if cap > 10% with confidenceT > 0 and weight > 0
+    //  15. Revert if cap > 5% with confidenceT > 0 and weight > 0
     // ─────────────────────────────────────────────────────────────────
 
-    function testRevertWhenCapExceeds10Percent() public {
+    function testRevertWhenCapExceeds5Percent() public {
         uint256 confidenceT = block.timestamp + 10 minutes;
         uint256 weight = 1000;
-        uint256 cap = 200_000; // 20% — exceeds 10% limit
+        uint256 cap = 100_000; // 10% — exceeds 5% limit
 
         OrderRFQLib.OrderRFQ memory order =
             _orderWithConfidence(16, getFutureTimestamp(2 hours), confidenceT, weight, cap);
@@ -529,12 +529,12 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
     }
 
     // ─────────────────────────────────────────────────────────────────
-    //  16. No revert if cap > 10% but confidenceT == 0 (slippage disabled)
+    //  16. No revert if cap > 5% but confidenceT == 0 (slippage disabled)
     // ─────────────────────────────────────────────────────────────────
 
-    function testNoRevertWhenCapExceeds10PercentButConfidenceTIsZero() public {
+    function testNoRevertWhenCapExceeds5PercentButConfidenceTIsZero() public {
         uint256 weight = 1000;
-        uint256 cap = 200_000; // 20% — exceeds limit but confidenceT == 0
+        uint256 cap = 100_000; // 10% — exceeds limit but confidenceT == 0
 
         OrderRFQLib.OrderRFQ memory order =
             _orderWithConfidence(17, getFutureTimestamp(2 hours), 0, weight, cap);
@@ -550,12 +550,12 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
     }
 
     // ─────────────────────────────────────────────────────────────────
-    //  17. No revert if cap > 10% but confidenceWeight == 0 (slippage disabled)
+    //  17. No revert if cap > 5% but confidenceWeight == 0 (slippage disabled)
     // ─────────────────────────────────────────────────────────────────
 
-    function testNoRevertWhenCapExceeds10PercentButWeightIsZero() public {
+    function testNoRevertWhenCapExceeds5PercentButWeightIsZero() public {
         uint256 confidenceT = block.timestamp + 10 minutes;
-        uint256 cap = 200_000; // 20% — exceeds limit but weight == 0
+        uint256 cap = 100_000; // 10% — exceeds limit but weight == 0
 
         OrderRFQLib.OrderRFQ memory order =
             _orderWithConfidence(18, getFutureTimestamp(2 hours), confidenceT, 0, cap);

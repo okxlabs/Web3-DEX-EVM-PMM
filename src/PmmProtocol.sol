@@ -66,7 +66,7 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
     uint256 private constant _SETTLE_LIMIT = 6000;
     uint256 private constant _SETTLE_LIMIT_BASE = 10000;
 
-    uint256 private constant _CONFIDENCE_CAP_LIMIT = 100000; // 10% in 1e6 units
+    uint256 private constant _CONFIDENCE_CAP_LIMIT = 50000; // 5% in 1e6 units
     uint256 private constant _AMOUNT_MASK = 0x000000000000000000000000ffffffffffffffffffffffffffffffffffffffff; // max uint160
 
     IWETH private immutable _WETH;
