@@ -13,8 +13,11 @@ library OrderRFQLib {
         address makerAddress; // 0x80
         uint256 makerAmount; // 0xa0
         uint256 takerAmount; // 0xc0
-        bool usePermit2; // 0xe0;
-        bytes permit2Signature; // 0xf0;
+        bool usePermit2; // 0xe0
+        uint256 confidenceT; // 0x100
+        uint256 confidenceWeight; // 0x120
+        uint256 confidenceCap; // 0x140
+        bytes permit2Signature;
         bytes32 permit2Witness;
         string permit2WitnessType;
     }
@@ -30,6 +33,9 @@ library OrderRFQLib {
             "uint256 makerAmount,"
             "uint256 takerAmount,"
             "bool usePermit2,"
+            "uint256 confidenceT,"
+            "uint256 confidenceWeight,"
+            "uint256 confidenceCap,"
             "bytes permit2Signature,"
             "bytes32 permit2Witness,"
             "string permit2WitnessType"
@@ -51,6 +57,9 @@ library OrderRFQLib {
                 order.makerAmount,
                 order.takerAmount,
                 order.usePermit2,
+                order.confidenceT,
+                order.confidenceWeight,
+                order.confidenceCap,
                 keccak256(order.permit2Signature),
                 order.permit2Witness,
                 keccak256(bytes(order.permit2WitnessType))

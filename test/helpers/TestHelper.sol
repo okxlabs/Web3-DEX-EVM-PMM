@@ -35,7 +35,10 @@ contract TestHelper is Test {
         address makerAddress,
         uint256 makerAmount,
         uint256 takerAmount,
-        bool usePermit2
+        bool usePermit2,
+        uint256 confidenceT,
+        uint256 confidenceWeight,
+        uint256 confidenceCap
     ) internal pure returns (OrderRFQLib.OrderRFQ memory) {
         return OrderRFQLib.OrderRFQ({
             rfqId: rfqId,
@@ -46,6 +49,9 @@ contract TestHelper is Test {
             makerAmount: makerAmount,
             takerAmount: takerAmount,
             usePermit2: usePermit2,
+            confidenceT: confidenceT,
+            confidenceWeight: confidenceWeight,
+            confidenceCap: confidenceCap,
             permit2Signature: "",
             permit2Witness: bytes32(0),
             permit2WitnessType: ""
