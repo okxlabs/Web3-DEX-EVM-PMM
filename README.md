@@ -23,7 +23,7 @@ The OKX Labs DEX aggregator traditionally relied on AMM liquidity. Large trades 
 
 - **v2.0** - Added Permit2-based maker transfers.
 - **v3.0 (Nov 2025)** - Explicit `OrderRFQ` struct, inline Permit2 signatures + witness data, cancellable RFQ IDs, settlement guardrails, and updated EIP-712 domain `"OKX Labs PMM Protocol"`.
-- **v3.1** - Added time-slippage (confidence) mechanism: `confidenceT`, `confidenceWeight`, and `confidenceCap` fields in `OrderRFQ`, enabling makers to encode automatic price decay for stale quotes (capped at 5%). This is the baseline for the current public release.
+- **v4.0 (Feb 2026)** - Added time-slippage (confidence) mechanism: `confidenceT`, `confidenceWeight`, and `confidenceCap` fields in `OrderRFQ`, enabling makers to encode automatic price decay for stale quotes (capped at 5%). This is the baseline for the current public release.
 
 ## 3. Overview
 
@@ -275,6 +275,6 @@ The helper also exports `signPermit2WithWitness`, which produces the Permit2 sig
 
 ## 8. Document Metadata
 
-- **Document version**: v3.1
-- **Last updated**: 2025
+- **Document version**: v4.0
+- **Last updated**: Feb 2026
 - **Language**: English
