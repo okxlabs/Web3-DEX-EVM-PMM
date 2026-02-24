@@ -55,7 +55,7 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
      */
     event OrderCancelledRFQ(uint256 indexed rfqId, address indexed maker);
 
-    string private constant _NAME = "OnChain Labs PMM Protocol";
+    string private constant _NAME = "OKX Labs PMM Protocol";
     string private constant _VERSION = "1.0";
 
     uint256 private constant _RAW_CALL_GAS_LIMIT = 5000;
