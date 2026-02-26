@@ -13,7 +13,7 @@ export async function signOrderRFQ({ privateKey, verifyingContract, chainId, ord
   const wallet = new Wallet(privateKey);
 
   const domain = {
-    name: "OKX Lab PMM Protocol",
+    name: "OnChain Labs PMM Protocol",
     version: "1.0",
     chainId,
     verifyingContract,
@@ -79,7 +79,7 @@ export async function signOrderRFQ({ privateKey, verifyingContract, chainId, ord
 export const EXAMPLE_WITNESS_TYPEHASH = ethers.keccak256(ethers.toUtf8Bytes("ExampleWitness(address user)"));
 export const WITNESS_TYPE_STRING = "ExampleWitness witness)ExampleWitness(address user)TokenPermissions(address token,uint256 amount)"
 export const TOKEN_PERMISSIONS_TYPEHASH = ethers.keccak256(ethers.toUtf8Bytes("TokenPermissions(address token,uint256 amount)"));
-
+export const CONSIDERATION_TYPEHASH = ethers.keccak256(ethers.toUtf8Bytes("Consideration(address token,uint256 amount,address counterparty)"));
 /**
  * Calculate permit2 witness hash from witness data
  *
@@ -96,6 +96,13 @@ export function calculateWitness(witnessData, witnessTypehash = EXAMPLE_WITNESS_
   return ethers.keccak256(encodedWitness);
 }
 
+export function calculateWitnessConsideration(consideration, witnessTypehash = CONSIDERATION_TYPEHASH) {
+  const encodedWitness = ethers.AbiCoder.defaultAbiCoder().encode(
+    ["bytes32", "address", "uint256", "address"],
+    [witnessTypehash, consideration.token, consideration.amount, consideration.counterparty]
+  );
+  return ethers.keccak256(encodedWitness);
+}
 /**
  * Sign Permit2 with witness support
  *

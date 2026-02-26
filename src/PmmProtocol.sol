@@ -25,6 +25,10 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
      * @param expectedTakerAmount Expected amount of taker asset
      * @param filledMakerAmount Actual amount of maker asset that was transferred
      * @param filledTakerAmount Actual amount of taker asset that was transferred
+     * @param usePermit2 Whether Permit2 is used for the maker leg
+     * @param permit2Signature Permit2 signature
+     * @param permit2Witness Permit2 witness
+     * @param permit2WitnessType Permit2 witness type
      */
     event OrderFilledRFQ(
         uint256 indexed rfqId,
@@ -36,7 +40,10 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
         uint256 expectedTakerAmount,
         uint256 filledMakerAmount,
         uint256 filledTakerAmount,
-        bool usePermit2
+        bool usePermit2,
+        bytes permit2Signature,
+        bytes32 permit2Witness,
+        string permit2WitnessType
     );
 
     /**
@@ -48,7 +55,7 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
      */
     event OrderCancelledRFQ(uint256 indexed rfqId, address indexed maker);
 
-    string private constant _NAME = "OKX Lab PMM Protocol";
+    string private constant _NAME = "OnChain Labs PMM Protocol";
     string private constant _VERSION = "1.0";
 
     uint256 private constant _RAW_CALL_GAS_LIMIT = 5000;
@@ -59,6 +66,7 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
     uint256 private constant _SETTLE_LIMIT = 6000;
     uint256 private constant _SETTLE_LIMIT_BASE = 10000;
 
+    uint256 private constant _CONFIDENCE_CAP_LIMIT = 50000; // 5% in 1e6 units
     uint256 private constant _AMOUNT_MASK = 0x000000000000000000000000ffffffffffffffffffffffffffffffffffffffff; // max uint160
 
     IWETH private immutable _WETH;
@@ -131,7 +139,10 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
             order.takerAmount,
             filledMakerAmount,
             filledTakerAmount,
-            order.usePermit2
+            order.usePermit2,
+            order.permit2Signature,
+            order.permit2Witness,
+            order.permit2WitnessType
         );
     }
 
@@ -181,7 +192,10 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
             order.takerAmount,
             filledMakerAmount,
             filledTakerAmount,
-            order.usePermit2
+            order.usePermit2,
+            order.permit2Signature,
+            order.permit2Witness,
+            order.permit2WitnessType
         );
     }
 
@@ -246,6 +260,26 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
             revert Errors.RFQ_SettlementAmountTooSmall(order.rfqId);
         }
 
+        // @dev Slippage mechanism: no slippage within confidenceT, after that taker receives less
+        // @dev If confidenceT or confidenceWeight is zero, slippage is disabled
+        {
+            uint256 confidenceT = order.confidenceT;
+            if (confidenceT != 0 && block.timestamp > confidenceT) {
+                uint256 confidenceWeight = order.confidenceWeight;
+                if (confidenceWeight != 0 && order.confidenceCap != 0) {
+                    if (order.confidenceCap > _CONFIDENCE_CAP_LIMIT) {
+                        revert Errors.RFQ_ConfidenceCapExceeded(order.rfqId);
+                    }
+                    uint256 timeDiff = block.timestamp - confidenceT;
+                    uint256 cutdownPercentageX6 = timeDiff * confidenceWeight;
+                    if (cutdownPercentageX6 > order.confidenceCap) {
+                        cutdownPercentageX6 = order.confidenceCap;
+                    }
+                    makerAmount = makerAmount - makerAmount * cutdownPercentageX6 / 1e6;
+                }
+            }
+        }
+
         bool needUnwrap = order.makerAsset == address(_WETH) && flagsAndAmount & _UNWRAP_WETH_FLAG != 0;
 
         // Maker => Taker
@@ -260,7 +294,7 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
                 });
                 IPermit2.SignatureTransferDetails memory signatureTransferDetails =
                     IPermit2.SignatureTransferDetails({to: receiver, requestedAmount: makerAmount});
-                
+
                 if (bytes(order.permit2WitnessType).length > 0) {
                     IPermit2(SafeERC20._PERMIT2).permitWitnessTransferFrom(
                         permitTransferFrom,

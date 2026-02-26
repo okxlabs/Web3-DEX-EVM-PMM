@@ -4,3 +4,5 @@ broadcast
 lib
 out
 cache
+lib
+.env

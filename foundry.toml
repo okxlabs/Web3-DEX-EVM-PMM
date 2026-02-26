@@ -1,5 +1,7 @@
 [profile.default]
 src = "src"
+test = "test"
+script = "scripts"
 out = "out"
 libs = ["lib"]
 optimizer = true
@@ -20,10 +22,5 @@ fs_permissions = [
 [rpc_endpoints]
 arbitrum = "https://arb1.arbitrum.io/rpc"
 arbitrum_sepolia = "https://sepolia-rollup.arbitrum.io/rpc"
-
-# Etherscan API keys
-[etherscan]
-arbitrum = { key = "VD3HX86J6TITE1WVT9HEESQ7AIPE11MCI5" }
-arbitrum_sepolia = { key = "VD3HX86J6TITE1WVT9HEESQ7AIPE11MCI5" }
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
