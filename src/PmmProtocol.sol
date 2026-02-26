@@ -55,8 +55,8 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
      */
     event OrderCancelledRFQ(uint256 indexed rfqId, address indexed maker);
 
-    string private constant _NAME = "OnChain Labs PMM Protocol";
-    string private constant _VERSION = "1.0";
+    string private constant _NAME = "OKX Labs PMM Protocol";
+    string private constant _VERSION = "1.1";
 
     uint256 private constant _RAW_CALL_GAS_LIMIT = 5000;
     uint256 private constant _MAKER_AMOUNT_FLAG = 1 << 255;
@@ -66,6 +66,7 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
     uint256 private constant _SETTLE_LIMIT = 6000;
     uint256 private constant _SETTLE_LIMIT_BASE = 10000;
 
+    uint256 private constant _CONFIDENCE_CAP_LIMIT = 50000; // 5% in 1e6 units
     uint256 private constant _AMOUNT_MASK = 0x000000000000000000000000ffffffffffffffffffffffffffffffffffffffff; // max uint160
 
     IWETH private immutable _WETH;
@@ -257,6 +258,26 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
                 || takerAmount < (order.takerAmount * _SETTLE_LIMIT) / _SETTLE_LIMIT_BASE
         ) {
             revert Errors.RFQ_SettlementAmountTooSmall(order.rfqId);
+        }
+
+        // @dev Slippage mechanism: no slippage within confidenceT, after that taker receives less
+        // @dev If confidenceT or confidenceWeight is zero, slippage is disabled
+        {
+            uint256 confidenceT = order.confidenceT;
+            if (confidenceT != 0 && block.timestamp > confidenceT) {
+                uint256 confidenceWeight = order.confidenceWeight;
+                if (confidenceWeight != 0 && order.confidenceCap != 0) {
+                    if (order.confidenceCap > _CONFIDENCE_CAP_LIMIT) {
+                        revert Errors.RFQ_ConfidenceCapExceeded(order.rfqId);
+                    }
+                    uint256 timeDiff = block.timestamp - confidenceT;
+                    uint256 cutdownPercentageX6 = timeDiff * confidenceWeight;
+                    if (cutdownPercentageX6 > order.confidenceCap) {
+                        cutdownPercentageX6 = order.confidenceCap;
+                    }
+                    makerAmount = makerAmount - makerAmount * cutdownPercentageX6 / 1e6;
+                }
+            }
         }
 
         bool needUnwrap = order.makerAsset == address(_WETH) && flagsAndAmount & _UNWRAP_WETH_FLAG != 0;

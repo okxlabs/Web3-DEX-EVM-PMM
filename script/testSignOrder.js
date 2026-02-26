@@ -35,6 +35,9 @@ const order1 = {
         makerAmount: MAKER_AMOUNT,
         takerAmount: TAKER_AMOUNT,
         usePermit2: false,
+        confidenceT: 0,
+        confidenceWeight: 0,
+        confidenceCap: 0,
         permit2Signature: "0x",
         permit2Witness: "0x0000000000000000000000000000000000000000000000000000000000000000",
         permit2WitnessType: ""
@@ -55,6 +58,9 @@ const order2 = {
         makerAmount: MAKER_AMOUNT,
         takerAmount: TAKER_AMOUNT,
         usePermit2: true,
+        confidenceT: 0,
+        confidenceWeight: 0,
+        confidenceCap: 0,
         permit2Signature: "0x",
         permit2Witness: "0x0000000000000000000000000000000000000000000000000000000000000000",
         permit2WitnessType: ""
@@ -75,6 +81,9 @@ const order3 = {
         makerAmount: MAKER_AMOUNT,
         takerAmount: TAKER_AMOUNT,
         usePermit2: true,
+        confidenceT: 0,
+        confidenceWeight: 0,
+        confidenceCap: 0,
         permit2Signature: await signPermit2WithWitness({
             permit: {
                 permitted: {
@@ -115,6 +124,9 @@ const order4 = {
         makerAmount: MAKER_AMOUNT,
         takerAmount: TAKER_AMOUNT,
         usePermit2: true,
+        confidenceT: 0,
+        confidenceWeight: 0,
+        confidenceCap: 0,
         permit2Signature: await signPermit2WithWitness({
             permit: {
                 permitted: {
@@ -157,7 +169,7 @@ const sendTx = async () => {
   const taker = new ethers.Wallet(takerPk, provider);
 
   const pmmAbi = [
-    "function fillOrderRFQTo((uint256 rfqId,uint256 expiry,address makerAsset,address takerAsset,address makerAddress,uint256 makerAmount,uint256 takerAmount,bool usePermit2,bytes permit2Signature,bytes32 permit2Witness,string permit2WitnessType) order, bytes signature, uint256 flagsAndAmount, address target) returns (uint256,uint256,bytes32)",
+    "function fillOrderRFQTo((uint256 rfqId,uint256 expiry,address makerAsset,address takerAsset,address makerAddress,uint256 makerAmount,uint256 takerAmount,bool usePermit2,uint256 confidenceT,uint256 confidenceWeight,uint256 confidenceCap,bytes permit2Signature,bytes32 permit2Witness,string permit2WitnessType) order, bytes signature, uint256 flagsAndAmount, address target) returns (uint256,uint256,bytes32)",
   ];
 
   const pmm = new ethers.Contract(VERIFYING_CONTRACT, pmmAbi, taker);

@@ -14,8 +14,11 @@ interface IPMMProtocol {
         address makerAddress; // 0x80
         uint256 makerAmount; // 0xa0
         uint256 takerAmount; // 0xc0
-        bool usePermit2; // 0xe0;
-        bytes permit2Signature; // 0xf0;
+        bool usePermit2; // 0xe0
+        uint256 confidenceT; // 0x100
+        uint256 confidenceWeight; // 0x120
+        uint256 confidenceCap; // 0x140
+        bytes permit2Signature;
         bytes32 permit2Witness;
         string permit2WitnessType;
     }
@@ -163,6 +166,9 @@ contract PMMAdapter {
         } else if (selector == 0x589584f5) {
             // RFQ_OrderAlreadyCancelledOrUsed(uint256 rfqId);
             revert(string(abi.encodePacked("RFQ_OrderAlreadyCancelledOrUsed ", rfqId.toString())));
+        } else if (selector == 0x1204d22d) {
+            // RFQ_ConfidenceCapExceeded(uint256 rfqId);
+            revert(string(abi.encodePacked("RFQ_ConfidenceCapExceeded ", rfqId.toString())));
         } else {
             revert(string(abi.encodePacked("RFQ_Failed ", rfqId.toString())));
         }

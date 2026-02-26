@@ -114,7 +114,10 @@ contract PmmProtocolTest is TestHelper {
             maker,
             1 ether,
             TAKING_AMOUNT,
-            false
+            false,
+            0,
+            0,
+            0
         );
         bytes memory signature = _sign(order);
 
@@ -137,7 +140,10 @@ contract PmmProtocolTest is TestHelper {
             maker,
             MAKER_AMOUNT,
             TAKING_AMOUNT,
-            false
+            false,
+            0,
+            0,
+            0
         );
         bytes memory signature = _sign(order);
 
@@ -210,7 +216,10 @@ contract PmmProtocolTest is TestHelper {
             maker,
             MAKER_AMOUNT,
             TAKING_AMOUNT,
-            usePermit2
+            usePermit2,
+            0,
+            0,
+            0
         );
     }
 
