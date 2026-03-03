@@ -6,8 +6,8 @@ This document lists the official `PMMProtocol` contract deployments across suppo
 |-------|---------|----------|
 | Ethereum Mainnet | `0x5035D128ef482276Aa3bCce4307ffF8961ba30F9` | [Etherscan](https://etherscan.io/address/0x5035D128ef482276Aa3bCce4307ffF8961ba30F9) |
 | Arbitrum One | `0xcdC09a6B5211bb51F18A1Af7691B6725bB024434` | [Arbiscan](https://arbiscan.io/address/0xcdC09a6B5211bb51F18A1Af7691B6725bB024434#code) |
-| BNB Chain | `0xdD30339C4b2f7bac319Ef4Fa5c6963cc9F470B2d` | [BscScan](https://bscscan.com/address/0xdD30339C4b2f7bac319Ef4Fa5c6963cc9F470B2d#code) |
 | Base | `0x4EFBd630205DD9B987c3BcbEe257600abC1e3C11` | [Basescan](https://basescan.org/address/0x4EFBd630205DD9B987c3BcbEe257600abC1e3C11#code) |
+| BNB Chain | `0xdD30339C4b2f7bac319Ef4Fa5c6963cc9F470B2d` | [BscScan](https://bscscan.com/address/0xdD30339C4b2f7bac319Ef4Fa5c6963cc9F470B2d#code) |
 
 
 ## Verification
