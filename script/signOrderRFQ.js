@@ -13,7 +13,7 @@ export async function signOrderRFQ({ privateKey, verifyingContract, chainId, ord
   const wallet = new Wallet(privateKey);
 
   const domain = {
-    name: "OnChain Labs PMM Protocol",
+    name: "OKX Labs PMM Protocol",
     version: "1.0",
     chainId,
     verifyingContract,
@@ -21,7 +21,7 @@ export async function signOrderRFQ({ privateKey, verifyingContract, chainId, ord
 
   // OrderRFQ typehash from Solidity - must match exactly
   const ORDER_RFQ_TYPEHASH = ethers.keccak256(ethers.toUtf8Bytes(
-    "OrderRFQ(uint256 rfqId,uint256 expiry,address makerAsset,address takerAsset,address makerAddress,uint256 makerAmount,uint256 takerAmount,bool usePermit2,bytes permit2Signature,bytes32 permit2Witness,string permit2WitnessType)"
+    "OrderRFQ(uint256 rfqId,uint256 expiry,address makerAsset,address takerAsset,address makerAddress,uint256 makerAmount,uint256 takerAmount,bool usePermit2,uint256 confidenceT,uint256 confidenceWeight,uint256 confidenceCap,bytes permit2Signature,bytes32 permit2Witness,string permit2WitnessType)"
   ));
 
   // Domain separator calculation matching Solidity
@@ -42,7 +42,7 @@ export async function signOrderRFQ({ privateKey, verifyingContract, chainId, ord
 
   // Struct hash calculation matching Solidity OrderRFQLib.hash()
   const structHash = ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(
-    ["bytes32", "uint256", "uint256", "address", "address", "address", "uint256", "uint256", "bool", "bytes32", "bytes32", "bytes32"],
+    ["bytes32", "uint256", "uint256", "address", "address", "address", "uint256", "uint256", "bool", "uint256", "uint256", "uint256", "bytes32", "bytes32", "bytes32"],
     [
       ORDER_RFQ_TYPEHASH,
       order.rfqId,
@@ -53,9 +53,12 @@ export async function signOrderRFQ({ privateKey, verifyingContract, chainId, ord
       order.makerAmount,
       order.takerAmount,
       order.usePermit2,
-      ethers.keccak256(order.permit2Signature), // Hashed like in Solidity
+      order.confidenceT,
+      order.confidenceWeight,
+      order.confidenceCap,
+      ethers.keccak256(order.permit2Signature),
       order.permit2Witness,
-      ethers.keccak256(ethers.toUtf8Bytes(order.permit2WitnessType)) // Hashed like in Solidity
+      ethers.keccak256(ethers.toUtf8Bytes(order.permit2WitnessType))
     ]
   ));
 

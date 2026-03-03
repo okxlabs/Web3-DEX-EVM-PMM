@@ -1,12 +1,12 @@
 # Web3 Trade PMM - RFQ Onboarding Guide
 
-This document explains how OnChain Labs onboards private market makers (PMMs) to its RFQ routing stack. It covers the end-to-end workflow—from API expectations through smart-contract semantics—so teams can plug into the aggregator without reverse-engineering the contracts or scripts in this repository.
+This document explains how OKX Labs onboards private market makers (PMMs) to its RFQ routing stack. It covers the end-to-end workflow—from API expectations through smart-contract semantics—so teams can plug into the aggregator without reverse-engineering the contracts or scripts in this repository.
 
 ## 1. Terminology
 
 | Term | Description |
 |------|-------------|
-| PMM | Private Market Maker that streams bespoke RFQ liquidity through OnChain Labs routing |
+| PMM | Private Market Maker that streams bespoke RFQ liquidity through OKX Labs routing |
 | RFQ ID | `uint64` identifier embedded in `OrderRFQ.rfqId`; used for replay protection |
 | flagsAndAmount | `uint256` passed into fill methods; high bits encode execution flags, low 160 bits encode the desired maker or taker amount |
 | Settlement limit | 60% minimum fill ratio enforced against `makerAmount` and `takerAmount` to avoid dust fills |
@@ -17,16 +17,17 @@ This document explains how OnChain Labs onboards private market makers (PMMs) to
 
 ## 2. Background
 
-The OnChain Labs DEX aggregator traditionally relied on AMM liquidity. Large trades experienced slippage and MEV exposure, so RFQ connectivity on EVM chains was prioritized to deliver tighter spreads and deterministic settlement. The Solidity contracts in this repository implement the on-chain leg of that RFQ flow, while off-chain makers expose pricing and signing services.
+The OKX Labs DEX aggregator traditionally relied on AMM liquidity. Large trades experienced slippage and MEV exposure, so RFQ connectivity on EVM chains was prioritized to deliver tighter spreads and deterministic settlement. The Solidity contracts in this repository implement the on-chain leg of that RFQ flow, while off-chain makers expose pricing and signing services.
 
 ### 2.1 Document Versions
 
 - **v2.0** - Added Permit2-based maker transfers.
-- **v3.0 (Nov 2025)** - Matches the contracts in `src/` today: explicit `OrderRFQ` struct, inline Permit2 signatures + witness data, cancellable RFQ IDs, settlement guardrails, and updated EIP-712 domain `"OnChain Labs PMM Protocol"`. This is the baseline for the current public release.
+- **v3.0 (Nov 2025)** - Explicit `OrderRFQ` struct, inline Permit2 signatures + witness data, cancellable RFQ IDs, settlement guardrails, and updated EIP-712 domain `"OKX Labs PMM Protocol"`.
+- **v4.0 (Feb 2026)** - Added time-slippage (confidence) mechanism: `confidenceT`, `confidenceWeight`, and `confidenceCap` fields in `OrderRFQ`, enabling makers to encode automatic price decay for stale quotes (capped at 5%). This is the baseline for the current public release.
 
 ## 3. Overview
 
-Private market makers plug into the OnChain Labs DEX aggregator by returning signed RFQ orders that can be filled on-chain via `PMMProtocol`. The router compares PMM quotes against AMM and CEX-style order books and selects the path with the best expected outcome.
+Private market makers plug into the OKX Labs DEX aggregator by returning signed RFQ orders that can be filled on-chain via `PMMProtocol`. The router compares PMM quotes against AMM and CEX-style order books and selects the path with the best expected outcome.
 
 ### 3.1 Trading Workflow
 
@@ -42,11 +43,12 @@ Private market makers plug into the OnChain Labs DEX aggregator by returning sig
 ### 3.2 Key Characteristics
 
 - **Replay protection** - RFQ IDs are tracked per maker via bitmask invalidators and can also be cancelled on-chain.
-- **Deterministic signatures** - All fills rely on the `OrderRFQLib.hash` helper and the domain `"OnChain Labs PMM Protocol" / v1.0`.
+- **Deterministic signatures** - All fills rely on the `OrderRFQLib.hash` helper and the domain `"OKX Labs PMM Protocol" / v1.0`.
 - **Partial fills** - Supported through `flagsAndAmount`, including maker- or taker-denominated inputs, while enforcing a 60% minimum settlement ratio.
 - **Permit2-native maker leg** - Makers can set `usePermit2=true` and optionally ship inline Permit2 signatures + witness metadata; otherwise standard `transferFrom` is used.
 - **WETH unwrap option** - Bit 252 unwraps WETH before forwarding funds, enabling native ETH settlement.
 - **Taker ERC20 permits** - `fillOrderRFQToWithPermit` can execute an ERC20 permit (EIP-2612 or Dai-like) before consuming the order.
+- **Time-slippage (confidence)** - Orders may include `confidenceT`, `confidenceWeight`, and `confidenceCap` fields. If `block.timestamp` exceeds `confidenceT`, the maker amount is reduced linearly over time (up to a 5% hard cap), giving makers built-in price protection against stale quotes.
 - **Security hardening** - Contract inherits `ReentrancyGuard`, validates signatures for EOAs or smart-contract signers, and rejects unexpected `msg.value`.
 
 ## 4. Smart Contract Integration
@@ -63,6 +65,9 @@ struct OrderRFQ {
     uint256 makerAmount;      // Quoted maker size
     uint256 takerAmount;      // Quoted taker size
     bool usePermit2;          // Toggles Permit2 transfers on the maker leg
+    uint256 confidenceT;      // Unix timestamp after which time-slippage begins (0 = disabled)
+    uint256 confidenceWeight; // Reduction rate per second in 1e6 units (0 = disabled)
+    uint256 confidenceCap;    // Maximum cumulative reduction in 1e6 units (0 = disabled, max 50000 = 5%)
     bytes permit2Signature;   // Optional inline Permit2 signature (65 bytes if present)
     bytes32 permit2Witness;   // Packed witness hash when using Permit2 witnesses
     string permit2WitnessType;// Canonical witness type string for Permit2
@@ -72,6 +77,7 @@ struct OrderRFQ {
 Field notes:
 - `rfqId` should fit within 64 bits; higher bits are truncated when the invalidator slot is computed.
 - `makerAmount`/`takerAmount` are capped by the settlement limit check (>= 60% when partially filling) and by the Permit2 `uint160` ceiling when `usePermit2` is true.
+- `confidenceT` / `confidenceWeight` / `confidenceCap` control the time-slippage mechanism. Setting any of them to zero disables slippage entirely. See [section 4.9](#49-time-slippage-confidence-mechanism) for details.
 - `permit2Signature` can be empty if the maker relies on pre-approved allowances with Permit2; if populated, it must encode either a standard `permitTransferFrom` (no witness data) or a `permitWitnessTransferFrom` payload whose witness fields match the values supplied alongside the order.
 
 ### 4.2 `flagsAndAmount`
@@ -137,10 +143,11 @@ All fill variants are `nonReentrant`, validate signature length hints, and rever
 3. **Invalidation** - `_invalidateOrder` sets the relevant bit in the maker's bitmap and fails if already set.
 4. **Amount derivation** - If the masked amount is zero, the full quote is used. Otherwise the contract derives the complementary side via `AmountCalculator` and enforces upper bounds.
 5. **Settlement limit** - Both maker and taker sides must be at least 60% of their quoted values (`_SETTLE_LIMIT / _SETTLE_LIMIT_BASE`). This blocks dust fills.
-6. **Maker leg transfer** - If `order.usePermit2` is true, the contract either executes a Permit2 transfer with the inline signature (witness-aware) or calls `transferFrom` on Permit2 using prior allowances. Otherwise, `SafeERC20.safeTransferFrom` pulls funds directly from the maker.
-7. **WETH unwrap (optional)** - When `_UNWRAP_WETH_FLAG` is set and `makerAsset` equals the configured WETH, funds are sent to the protocol, unwrapped, and forwarded as native ETH with a 5k gas stipend.
-8. **Taker leg transfer** - If the taker asset is WETH and `msg.value == takerAmount`, the protocol wraps the ETH and pushes WETH to the maker. Otherwise, it requires `msg.value == 0` and executes `safeTransferFrom` from the taker.
-9. **Event emission** - `OrderFilledRFQ` is emitted with expected and actual amounts along with the Permit2 usage flag.
+6. **Time-slippage (confidence)** - If `confidenceT > 0` and `block.timestamp > confidenceT`, the maker amount is reduced by `min(timeDiff * confidenceWeight, confidenceCap) / 1e6`. The taker amount is not affected. The settlement limit is evaluated **before** this reduction, so the order can still pass the 60% check even though the taker ultimately receives a slightly smaller maker amount.
+7. **Maker leg transfer** - If `order.usePermit2` is true, the contract either executes a Permit2 transfer with the inline signature (witness-aware) or calls `transferFrom` on Permit2 using prior allowances. Otherwise, `SafeERC20.safeTransferFrom` pulls funds directly from the maker.
+8. **WETH unwrap (optional)** - When `_UNWRAP_WETH_FLAG` is set and `makerAsset` equals the configured WETH, funds are sent to the protocol, unwrapped, and forwarded as native ETH with a 5k gas stipend.
+9. **Taker leg transfer** - If the taker asset is WETH and `msg.value == takerAmount`, the protocol wraps the ETH and pushes WETH to the maker. Otherwise, it requires `msg.value == 0` and executes `safeTransferFrom` from the taker.
+10. **Event emission** - `OrderFilledRFQ` is emitted with expected and actual amounts along with the Permit2 usage flag.
 
 ### 4.6 Maker Permit2 Flows
 
@@ -164,6 +171,48 @@ RFQ IDs are tracked via a two-level bitmap:
 - Bit position = `rfqId & 0xff`.
 
 `cancelOrderRFQ` sets the corresponding bit and emits `OrderCancelledRFQ`. The same helper is used internally when orders are filled. Any attempt to reuse an RFQ ID triggers `RFQ_InvalidatedOrder` or `RFQ_OrderAlreadyCancelledOrUsed`.
+
+### 4.9 Time-Slippage (Confidence) Mechanism
+
+Makers can embed time-based slippage parameters in their orders so that stale quotes automatically give the taker a smaller maker amount the longer the order sits unfilled. This replaces the need for short expiry windows and gives makers continuous price protection.
+
+**Parameters**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `confidenceT` | `uint256` | Unix timestamp marking the start of the slippage window. Before this time (or if set to `0`) no reduction is applied. |
+| `confidenceWeight` | `uint256` | Reduction rate per second expressed in parts-per-million (1e6 = 100%). E.g. `1000` means 0.1% per second. Set to `0` to disable. |
+| `confidenceCap` | `uint256` | Maximum cumulative reduction in parts-per-million. Capped at `_CONFIDENCE_CAP_LIMIT` (50 000 = 5%). Set to `0` to disable. |
+
+**Formula**
+
+When `block.timestamp > confidenceT` and all three parameters are non-zero:
+
+```
+timeDiff            = block.timestamp - confidenceT
+cutdownPercentageX6 = min(timeDiff * confidenceWeight, confidenceCap)
+adjustedMakerAmount = makerAmount - makerAmount * cutdownPercentageX6 / 1e6
+```
+
+**Behaviour summary**
+
+- If any of `confidenceT`, `confidenceWeight`, or `confidenceCap` is `0`, the mechanism is fully disabled and the maker amount is unmodified.
+- At or before `confidenceT`, no reduction is applied (`block.timestamp > confidenceT` is strict).
+- Once active, the reduction grows linearly at `confidenceWeight` per second until it hits `confidenceCap`.
+- Only the maker amount is reduced; the taker amount remains unchanged.
+- The 60% settlement limit is evaluated **before** the confidence reduction, so the settlement check passes on the original amounts.
+- If `confidenceCap > _CONFIDENCE_CAP_LIMIT` (50 000), the transaction reverts with `RFQ_ConfidenceCapExceeded`.
+
+**Example**
+
+A maker quotes 100 USDC with `confidenceT = T+10 min`, `confidenceWeight = 1000` (0.1%/s), `confidenceCap = 50000` (5%). If the order is filled 50 seconds after `confidenceT`:
+
+```
+cutdown = min(50 * 1000, 50000) = 50000   → 5% (capped)
+adjusted = 100 - 100 * 50000 / 1e6 = 95 USDC
+```
+
+The taker receives 95 USDC instead of 100.
 
 ## 5. API Specification
 
@@ -200,6 +249,9 @@ const order = {
   makerAmount: 22_723_800n,
   takerAmount: 6_000_000_000_000_000n,
   usePermit2: true,
+  confidenceT: BigInt(Math.floor(Date.now() / 1000) + 30),  // slippage starts 30s from now
+  confidenceWeight: 1000n,                                    // 0.1% per second
+  confidenceCap: 50000n,                                      // max 5% reduction
   permit2Signature: permitSigHex,            // 0x prefixed or "0x"
   permit2Witness: calculateWitness({ user: takerAddress }),
   permit2WitnessType: WITNESS_TYPE_STRING
@@ -223,6 +275,6 @@ The helper also exports `signPermit2WithWitness`, which produces the Permit2 sig
 
 ## 8. Document Metadata
 
-- **Document version**: v3.1
-- **Last updated**: 2025
+- **Document version**: v4.0
+- **Last updated**: Feb 2026
 - **Language**: English

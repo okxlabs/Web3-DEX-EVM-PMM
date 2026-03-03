@@ -5,7 +5,44 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
-interface IPMMProtocol {
+interface IPMMProtocolV1 {
+    struct OrderRFQ {
+        uint256 rfqId;
+        uint256 expiry;
+        address makerAsset;
+        address takerAsset;
+        address makerAddress;
+        uint256 makerAmount;
+        uint256 takerAmount;
+        bool usePermit2;
+    }
+
+    function fillOrderRFQTo(OrderRFQ memory order, bytes calldata signature, uint256 flagsAndAmount, address target)
+        external
+        returns (uint256, uint256, bytes32);
+}
+
+interface IPMMProtocolV2 {
+    struct OrderRFQ {
+        uint256 rfqId;
+        uint256 expiry;
+        address makerAsset;
+        address takerAsset;
+        address makerAddress;
+        uint256 makerAmount;
+        uint256 takerAmount;
+        bool usePermit2;
+        bytes permit2Signature;
+        bytes32 permit2Witness;
+        string permit2WitnessType;
+    }
+
+    function fillOrderRFQTo(OrderRFQ memory order, bytes calldata signature, uint256 flagsAndAmount, address target)
+        external
+        returns (uint256, uint256, bytes32);
+}
+
+interface IPMMProtocolV3 {
     struct OrderRFQ {
         uint256 rfqId; // 0x00
         uint256 expiry; // 0x20
@@ -14,8 +51,11 @@ interface IPMMProtocol {
         address makerAddress; // 0x80
         uint256 makerAmount; // 0xa0
         uint256 takerAmount; // 0xc0
-        bool usePermit2; // 0xe0;
-        bytes permit2Signature; // 0xf0;
+        bool usePermit2; // 0xe0
+        uint256 confidenceT; // 0x100
+        uint256 confidenceWeight; // 0x120
+        uint256 confidenceCap; // 0x140
+        bytes permit2Signature;
         bytes32 permit2Witness;
         string permit2WitnessType;
     }
@@ -41,31 +81,116 @@ contract PMMAdapter {
     constructor() {}
 
     function _PMMSwap(address to, address pool, bytes memory moreInfo, uint256 payerOrigin) internal {
-        (IPMMProtocol.OrderRFQ memory order, bytes memory signature, uint256 signatureType) =
-            abi.decode(moreInfo, (IPMMProtocol.OrderRFQ, bytes, uint256));
-        uint256 amount = IERC20(order.takerAsset).balanceOf(address(this));
-        if (amount > order.takerAmount) {
-            // The surplus will be returned back to the payer in the end
-            amount = order.takerAmount;
+        (bytes memory orderInfo, bytes memory signature, uint256 signatureType, uint256 orderType) =
+            abi.decode(moreInfo, (bytes, bytes, uint256, uint256));
+
+        if (orderType == 1) {
+            _executeV1Order(to, pool, orderInfo, signature, signatureType, payerOrigin);
+        } else if (orderType == 2) {
+            _executeV2Order(to, pool, orderInfo, signature, signatureType, payerOrigin);
+        } else if (orderType == 3) {
+            _executeV3Order(to, pool, orderInfo, signature, signatureType, payerOrigin);
+        } else {
+            revert("PMMAdapter: unsupported orderType");
         }
-        require(amount > 0, "Zero balance of PMM adapter");
-        SafeERC20.safeApprove(IERC20(order.takerAsset), pool, amount);
-        uint256 flagsAndAmount = (signatureType == uint256(SignatureType.EIP1271) ? 1 << 254 : 0) + amount;
+    }
+
+    function _executeV1Order(
+        address to,
+        address pool,
+        bytes memory orderInfo,
+        bytes memory signature,
+        uint256 signatureType,
+        uint256 payerOrigin
+    ) internal {
+        IPMMProtocolV1.OrderRFQ memory order = abi.decode(orderInfo, (IPMMProtocolV1.OrderRFQ));
+        uint256 flagsAndAmount;
+        {
+            uint256 amount = IERC20(order.takerAsset).balanceOf(address(this));
+            if (amount > order.takerAmount) {
+                amount = order.takerAmount;
+            }
+            require(amount > 0, "Zero balance of PMM adapter");
+            SafeERC20.safeApprove(IERC20(order.takerAsset), pool, amount);
+            flagsAndAmount = (signatureType == uint256(SignatureType.EIP1271) ? 1 << 254 : 0) + amount;
+        }
+
+        _call(
+            pool,
+            abi.encodeWithSelector(IPMMProtocolV1.fillOrderRFQTo.selector, order, signature, flagsAndAmount, to),
+            order.rfqId
+        );
+
+        _handleRefund(order.takerAsset, payerOrigin);
+    }
+
+    function _executeV2Order(
+        address to,
+        address pool,
+        bytes memory orderInfo,
+        bytes memory signature,
+        uint256 signatureType,
+        uint256 payerOrigin
+    ) internal {
+        IPMMProtocolV2.OrderRFQ memory order = abi.decode(orderInfo, (IPMMProtocolV2.OrderRFQ));
+        uint256 flagsAndAmount;
+        {
+            uint256 amount = IERC20(order.takerAsset).balanceOf(address(this));
+            if (amount > order.takerAmount) {
+                amount = order.takerAmount;
+            }
+            require(amount > 0, "Zero balance of PMM adapter");
+            SafeERC20.safeApprove(IERC20(order.takerAsset), pool, amount);
+            flagsAndAmount = (signatureType == uint256(SignatureType.EIP1271) ? 1 << 254 : 0) + amount;
+        }
+
+        _call(
+            pool,
+            abi.encodeWithSelector(IPMMProtocolV2.fillOrderRFQTo.selector, order, signature, flagsAndAmount, to),
+            order.rfqId
+        );
+
+        _handleRefund(order.takerAsset, payerOrigin);
+    }
+
+    function _executeV3Order(
+        address to,
+        address pool,
+        bytes memory orderInfo,
+        bytes memory signature,
+        uint256 signatureType,
+        uint256 payerOrigin
+    ) internal {
+        IPMMProtocolV3.OrderRFQ memory order = abi.decode(orderInfo, (IPMMProtocolV3.OrderRFQ));
+        uint256 flagsAndAmount;
+        {
+            uint256 amount = IERC20(order.takerAsset).balanceOf(address(this));
+            if (amount > order.takerAmount) {
+                amount = order.takerAmount;
+            }
+            require(amount > 0, "Zero balance of PMM adapter");
+            SafeERC20.safeApprove(IERC20(order.takerAsset), pool, amount);
+            flagsAndAmount = (signatureType == uint256(SignatureType.EIP1271) ? 1 << 254 : 0) + amount;
+        }
 
         // IPMMProtocol(pool).fillOrderRFQTo(order, signature, flagsAndAmount, to);
         _call(
             pool,
-            abi.encodeWithSelector(IPMMProtocol.fillOrderRFQTo.selector, order, signature, flagsAndAmount, to),
+            abi.encodeWithSelector(IPMMProtocolV3.fillOrderRFQTo.selector, order, signature, flagsAndAmount, to),
             order.rfqId
         );
 
+        _handleRefund(order.takerAsset, payerOrigin);
+    }
+
+    function _handleRefund(address takerAsset, uint256 payerOrigin) internal {
         address _payerOrigin;
         if ((payerOrigin & ORIGIN_PAYER) == ORIGIN_PAYER) {
             _payerOrigin = address(uint160(uint256(payerOrigin) & ADDRESS_MASK));
         }
-        uint256 amountLeft = IERC20(order.takerAsset).balanceOf(address(this));
+        uint256 amountLeft = IERC20(takerAsset).balanceOf(address(this));
         if (amountLeft > 0 && _payerOrigin != address(0)) {
-            SafeERC20.safeTransfer(IERC20(order.takerAsset), _payerOrigin, amountLeft);
+            SafeERC20.safeTransfer(IERC20(takerAsset), _payerOrigin, amountLeft);
         }
     }
 
@@ -163,6 +288,9 @@ contract PMMAdapter {
         } else if (selector == 0x589584f5) {
             // RFQ_OrderAlreadyCancelledOrUsed(uint256 rfqId);
             revert(string(abi.encodePacked("RFQ_OrderAlreadyCancelledOrUsed ", rfqId.toString())));
+        } else if (selector == 0x1204d22d) {
+            // RFQ_ConfidenceCapExceeded(uint256 rfqId);
+            revert(string(abi.encodePacked("RFQ_ConfidenceCapExceeded ", rfqId.toString())));
         } else {
             revert(string(abi.encodePacked("RFQ_Failed ", rfqId.toString())));
         }
