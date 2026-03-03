@@ -4,10 +4,10 @@ This document lists the official `PMMProtocol` contract deployments across suppo
 
 | Chain | Address | Explorer |
 |-------|---------|----------|
-| Ethereum Mainnet | `0x0bdf246b4aef9cfe4dd6eef153a1b645ac4bcbb6` | [Etherscan](https://etherscan.io/address/0x0bdf246b4aef9cfe4dd6eef153a1b645ac4bcbb6) |
-| Arbitrum One | `0x1ef032a3c471a99cc31578c8007f256d95e89896` | [Arbiscan](https://arbiscan.io/address/0x1ef032a3c471a99cc31578c8007f256d95e89896#code) |
-| Base | `0xed97b4331fff9dc8c40936532a04ac1400f273a5` | [Basescan](https://basescan.org/address/0xed97b4331fff9dc8c40936532a04ac1400f273a5#code) |
-| BNB Chain | `0x9ff547bbb813a0e5d53742c7a5f7370dcea214a3` | [BscScan](https://bscscan.com/address/0x9ff547bbb813a0e5d53742c7a5f7370dcea214a3#code) |
+| Ethereum Mainnet | `0x5035D128ef482276Aa3bCce4307ffF8961ba30F9` | [Etherscan](https://etherscan.io/address/0x5035D128ef482276Aa3bCce4307ffF8961ba30F9) |
+| Arbitrum One | `0xcdC09a6B5211bb51F18A1Af7691B6725bB024434` | [Arbiscan](https://arbiscan.io/address/0xcdC09a6B5211bb51F18A1Af7691B6725bB024434#code) |
+| Base | `0x4EFBd630205DD9B987c3BcbEe257600abC1e3C11` | [Basescan](https://basescan.org/address/0x4EFBd630205DD9B987c3BcbEe257600abC1e3C11#code) |
+| BNB Chain | `0xdD30339C4b2f7bac319Ef4Fa5c6963cc9F470B2d` | [BscScan](https://bscscan.com/address/0xdD30339C4b2f7bac319Ef4Fa5c6963cc9F470B2d#code) |
 
 
 ## Verification
@@ -18,7 +18,7 @@ All contracts are verified on their respective block explorers. Source code matc
 
 | Chain | Address | Explorer |
 |-------|---------|----------|
-| Ethereum Mainnet | `0xc5c0ef0e63f8bfad9750797b86942bf072d6bd54` | [Etherscan](https://etherscan.io/address/0xc5c0ef0e63f8bfad9750797b86942bf072d6bd54) |
-| Arbitrum One | `0x52062a1d475055ef92b70a5cc432938cb50dfd0d` | [Arbiscan](https://arbiscan.io/address/0x52062a1d475055ef92b70a5cc432938cb50dfd0d) |
-| Base | `0x3e1f2b904af95220ac3e334f541884c90a539a16` | [Basescan](https://basescan.org/address/0x3e1f2b904af95220ac3e334f541884c90a539a16) |
-| BNB Chain | `0x885b54434a31a85812f7418b4bb287562475b9a7` | [BscScan](https://bscscan.com/address/0x885b54434a31a85812f7418b4bb287562475b9a7) |
+| Ethereum Mainnet | `0xce937da1ffd21673Aa1e063459873F30189A2193` | [Etherscan](https://etherscan.io/address/0xce937da1ffd21673Aa1e063459873F30189A2193) |
+| Arbitrum One | `0x50FEC44764EB2FBf86a212139213A743e299313c` | [Arbiscan](https://arbiscan.io/address/0x50FEC44764EB2FBf86a212139213A743e299313c) |
+| Base | `0x4997a12D61520b0eB6D3758c8c0E97a6109B7995` | [Basescan](https://basescan.org/address/0x4997a12D61520b0eB6D3758c8c0E97a6109B7995) |
+| BNB Chain | `0x61e3FcA605e2f0E29d5A176E1C9868d4f0ee817F` | [BscScan](https://bscscan.com/address/0x61e3FcA605e2f0E29d5A176E1C9868d4f0ee817F) |
