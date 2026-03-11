@@ -12,7 +12,7 @@ OKX Labs PMM (Private Market Maker) RFQ Settlement Protocol integration guide.
 
 ## Repository
 
-`/Users/comcatli/Downloads/Web3-DEX-EVM-PMM`
+`https://github.com/okxlabs/Web3-DEX-EVM-PMM`
 
 ## Architecture Overview
 
