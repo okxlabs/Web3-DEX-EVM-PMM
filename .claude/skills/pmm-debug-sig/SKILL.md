@@ -40,8 +40,8 @@ There are **TWO independent signatures** in a Permit2 flow:
 ```javascript
 // MUST match the deployed contract's domain (PmmProtocol.sol:58-59)
 const domain = {
-  name: "OKX Labs PMM Protocol",     // <-- NOT "OnChain Labs" (verifyDigest.js has wrong name!)
-  version: "1.1",                    // <-- NOT "1.0" (signOrderRFQ.js currently has wrong version!)
+  name: "OKX Labs PMM Protocol",     // PmmProtocol.sol:58
+  version: "1.1",                    // PmmProtocol.sol:59
   chainId: <CORRECT_CHAIN_ID>,       // <-- Must match deployment chain
   verifyingContract: <PmmProtocol>   // <-- Must match actual contract address
 };
