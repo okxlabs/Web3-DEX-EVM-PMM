@@ -68,8 +68,8 @@ struct OrderRFQ {
 ```javascript
 // Source of truth: PmmProtocol.sol lines 58-59
 const domain = {
-  name: "OKX Labs PMM Protocol",   // NOT "OnChain Labs" (verifyDigest.js has wrong name)
-  version: "1.1",                   // NOT "1.0" (signOrderRFQ.js has wrong version)
+  name: "OKX Labs PMM Protocol",   // PmmProtocol.sol:58
+  version: "1.1",                   // PmmProtocol.sol:59
   chainId: <chainId>,
   verifyingContract: <PmmProtocol address>
 };
