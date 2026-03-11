@@ -72,6 +72,10 @@ Project-level skills in `.claude/skills/`:
 
 ## Deployment Addresses
 
+See [DEPLOYMENT.md](DEPLOYMENT.md) for full V1/V2/V3 address list.
+
+**V3 (Current):**
+
 | Chain | PmmProtocol | Adaptor |
 |-------|-------------|---------|
 | Ethereum | `0x5035D128ef482276Aa3bCce4307ffF8961ba30F9` | `0xce937da1ffd21673Aa1e063459873F30189A2193` |
