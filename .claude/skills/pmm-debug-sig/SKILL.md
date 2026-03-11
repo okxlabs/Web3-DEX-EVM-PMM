@@ -236,7 +236,7 @@ const EXPECTED_PERMIT2_WITNESS = "0x951f9706fd39d6a67e130deab708eb03c7fbd0df5fc9
 
 Run verification:
 ```bash
-cd /Users/comcatli/Downloads/Web3-DEX-EVM-PMM
+cd <project-root>
 node script/verifyDigest.js  # outdated but useful for Permit2 step validation
 ```
 
