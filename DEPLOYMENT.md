@@ -12,6 +12,9 @@ This document lists the official contract deployments across supported chains. *
 | Arbitrum One | `0xcdC09a6B5211bb51F18A1Af7691B6725bB024434` | [Arbiscan](https://arbiscan.io/address/0xcdC09a6B5211bb51F18A1Af7691B6725bB024434) |
 | Base | `0x4EFBd630205DD9B987c3BcbEe257600abC1e3C11` | [Basescan](https://basescan.org/address/0x4EFBd630205DD9B987c3BcbEe257600abC1e3C11) |
 | BNB Chain | `0xdD30339C4b2f7bac319Ef4Fa5c6963cc9F470B2d` | [BscScan](https://bscscan.com/address/0xdD30339C4b2f7bac319Ef4Fa5c6963cc9F470B2d) |
+| XLayer | TBD | [OKLink](https://www.oklink.com/xlayer) |
+
+<!-- XLayer pre-check (2026-05-29): Chain ID 196 confirmed via PRD; WOKB 0xe538905cf8410324e03A5A23C1c177a474D59b2b (PRD-sourced, live verification pending); Permit2 canonical address assumed, initial deploy with usePermit2=false; dry-run PASS on local anvil simulation -->
 
 ### V2
 
@@ -41,6 +44,7 @@ This document lists the official contract deployments across supported chains. *
 | Arbitrum One | `0x50FEC44764EB2FBf86a212139213A743e299313c` | [Arbiscan](https://arbiscan.io/address/0x50FEC44764EB2FBf86a212139213A743e299313c) |
 | Base | `0x4997a12D61520b0eB6D3758c8c0E97a6109B7995` | [Basescan](https://basescan.org/address/0x4997a12D61520b0eB6D3758c8c0E97a6109B7995) |
 | BNB Chain | `0x61e3FcA605e2f0E29d5A176E1C9868d4f0ee817F` | [BscScan](https://bscscan.com/address/0x61e3FcA605e2f0E29d5A176E1C9868d4f0ee817F) |
+| XLayer | TBD | [OKLink](https://www.oklink.com/xlayer) |
 
 ### V2
 
