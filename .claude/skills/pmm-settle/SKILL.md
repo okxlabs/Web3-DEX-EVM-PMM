@@ -41,7 +41,7 @@ See [DEPLOYMENT.md](../../DEPLOYMENT.md) for full V1/V2/V3 address list.
 | Arbitrum | `0xcdC09a6B5211bb51F18A1Af7691B6725bB024434` |
 | Base | `0x4EFBd630205DD9B987c3BcbEe257600abC1e3C11` |
 | BNB Chain | `0xdD30339C4b2f7bac319Ef4Fa5c6963cc9F470B2d` |
-| XLayer | (address TBD) |
+| XLayer | `0x5E18E052517Af66575105ACff6A7f17DED3f10F2` |
 
 **V3 PmmAdaptor (Current):**
 
@@ -51,7 +51,7 @@ See [DEPLOYMENT.md](../../DEPLOYMENT.md) for full V1/V2/V3 address list.
 | Arbitrum | `0x50FEC44764EB2FBf86a212139213A743e299313c` |
 | Base | `0x4997a12D61520b0eB6D3758c8c0E97a6109B7995` |
 | BNB Chain | `0x61e3FcA605e2f0E29d5A176E1C9868d4f0ee817F` |
-| XLayer | (address TBD) |
+| XLayer | `0x33a8547ddE7fBFd031fD82685dB8a06a3Db98fF7` |
 
 **V2 PmmProtocol:**
 
