@@ -22,5 +22,6 @@ fs_permissions = [
 [rpc_endpoints]
 arbitrum = "https://arb1.arbitrum.io/rpc"
 arbitrum_sepolia = "https://sepolia-rollup.arbitrum.io/rpc"
+xlayer = "https://rpc.xlayer.tech"
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
