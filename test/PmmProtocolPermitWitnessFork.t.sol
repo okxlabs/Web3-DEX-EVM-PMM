@@ -74,7 +74,7 @@ contract PmmProtocolPermitWitnessFork is TestHelper {
         address MAKER_ADDRESS1 = deployer;
         address TAKER_ADDRESS1 = vm.addr(PK);
         // Create Order
-        OrderRFQLib.OrderRFQ memory order = createOrder(1357999, EXPIRY, usdc, usdt, MAKER_ADDRESS1, 100, 90, true);
+        OrderRFQLib.OrderRFQ memory order = createOrder(1357999, EXPIRY, usdc, usdt, MAKER_ADDRESS1, 100, 90, true, 0, 0, 0);
         emit log_named_uint("rfqId", order.rfqId);
         emit log_named_uint("expiry", order.expiry);
 
@@ -169,7 +169,7 @@ contract PmmProtocolPermitWitnessFork is TestHelper {
         address MAKER_ADDRESS1 = deployer;
         address TAKER_ADDRESS1 = vm.addr(PK);
         // Create Order
-        OrderRFQLib.OrderRFQ memory order = createOrder(13579999, EXPIRY, usdc, usdt, MAKER_ADDRESS1, 100, 90, true);
+        OrderRFQLib.OrderRFQ memory order = createOrder(13579999, EXPIRY, usdc, usdt, MAKER_ADDRESS1, 100, 90, true, 0, 0, 0);
         emit log_named_uint("rfqId", order.rfqId);
         emit log_named_uint("expiry", order.expiry);
 
