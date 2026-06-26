@@ -38,11 +38,11 @@ This document lists the official contract deployments across supported chains. *
 
 | Chain | Address | Explorer |
 |-------|---------|----------|
-| Ethereum Mainnet | `0xce937da1ffd21673Aa1e063459873F30189A2193` | [Etherscan](https://etherscan.io/address/0xce937da1ffd21673Aa1e063459873F30189A2193) |
-| Arbitrum One | `0x50FEC44764EB2FBf86a212139213A743e299313c` | [Arbiscan](https://arbiscan.io/address/0x50FEC44764EB2FBf86a212139213A743e299313c) |
-| Base | `0x4997a12D61520b0eB6D3758c8c0E97a6109B7995` | [Basescan](https://basescan.org/address/0x4997a12D61520b0eB6D3758c8c0E97a6109B7995) |
-| BNB Chain | `0x61e3FcA605e2f0E29d5A176E1C9868d4f0ee817F` | [BscScan](https://bscscan.com/address/0x61e3FcA605e2f0E29d5A176E1C9868d4f0ee817F) |
-| XLayer | `0x33a8547ddE7fBFd031fD82685dB8a06a3Db98fF7` | [OKLink](https://www.oklink.com/xlayer/address/0x33a8547ddE7fBFd031fD82685dB8a06a3Db98fF7) |
+| Ethereum Mainnet | `0x10C40FEc71F6cd0F85613467eBa1857eCB1D1308` | [Etherscan](https://etherscan.io/address/0x10C40FEc71F6cd0F85613467eBa1857eCB1D1308) |
+| Arbitrum One | `0xF2326e58A265f7020ED6D342A9Be4076B9fCF701` | [Arbiscan](https://arbiscan.io/address/0xF2326e58A265f7020ED6D342A9Be4076B9fCF701) |
+| Base | `0xa16f075B61d379708485F66e15075C4b638dC554` | [Basescan](https://basescan.org/address/0xa16f075B61d379708485F66e15075C4b638dC554) |
+| BNB Chain | `0x85E569247f1c9b34E1d39Be41ae5194FB8f73156` | [BscScan](https://bscscan.com/address/0x85E569247f1c9b34E1d39Be41ae5194FB8f73156) |
+| XLayer | `0x5670035CAf2Da294Af4BCdC48fB68E9E6157a02e` | [OKLink](https://www.oklink.com/xlayer/address/0x5670035CAf2Da294Af4BCdC48fB68E9E6157a02e) |
 
 ### V2
 
