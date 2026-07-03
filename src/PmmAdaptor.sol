@@ -84,13 +84,13 @@ contract PMMAdapter {
     }
 
     /// @dev In-memory context for the read-only maker-balance recheck performed in the
-    /// `_call` fallback (else) branch. Populated only for V2/V3 Permit2 full-fill paths;
+    /// `_call` fallback (else) branch. Populated only for V2/V3 Permit2 paths;
     /// when `enabled == false` the 4-arg `_call` behaves identically to the legacy 3-arg one.
     struct MakerBalanceCheck {
-        bool enabled; // true only for Permit2-signature + full-fill V2/V3 orders
+        bool enabled; // true only for Permit2-signature V2/V3 orders
         address makerAsset; // order.makerAsset — token whose balanceOf(maker) is queried
         address maker; // order.makerAddress — account whose balance is checked
-        uint256 makerAmount; // order.makerAmount — full-fill maker payout (stage-1 threshold)
+        uint256 makerAmount; // maker payout for the fill (stage-1 threshold)
         uint256 confidenceT; // order.confidenceT      ┐ V3 time-slippage inputs
         uint256 confidenceWeight; // order.confidenceWeight ├ (V2 fills these with 0 → disabled)
         uint256 confidenceCap; // order.confidenceCap    ┘
@@ -152,7 +152,7 @@ contract PMMAdapter {
     ) internal {
         IPMMProtocolV2.OrderRFQ memory order = abi.decode(orderInfo, (IPMMProtocolV2.OrderRFQ));
         uint256 flagsAndAmount;
-        bool fullFill;
+        uint256 fillMakerAmount;
         {
             uint256 amount = IERC20(order.takerAsset).balanceOf(address(this));
             if (amount > order.takerAmount) {
@@ -161,15 +161,16 @@ contract PMMAdapter {
             require(amount > 0, "Zero balance of PMM adapter");
             SafeERC20.safeApprove(IERC20(order.takerAsset), pool, amount);
             flagsAndAmount = (signatureType == uint256(SignatureType.EIP1271) ? 1 << 254 : 0) + amount;
-            fullFill = (amount == order.takerAmount);
+            fillMakerAmount =
+                amount == order.takerAmount ? order.makerAmount : amount * order.makerAmount / order.takerAmount;
         }
 
         // V2 has no confidence (time-slippage) fields → confidence inputs are 0 (disabled).
         MakerBalanceCheck memory balanceCheck = MakerBalanceCheck({
-            enabled: order.usePermit2 && order.permit2Signature.length > 0 && fullFill,
+            enabled: order.usePermit2 && order.permit2Signature.length > 0,
             makerAsset: order.makerAsset,
             maker: order.makerAddress,
-            makerAmount: order.makerAmount,
+            makerAmount: fillMakerAmount,
             confidenceT: 0,
             confidenceWeight: 0,
             confidenceCap: 0
@@ -195,7 +196,7 @@ contract PMMAdapter {
     ) internal {
         IPMMProtocolV3.OrderRFQ memory order = abi.decode(orderInfo, (IPMMProtocolV3.OrderRFQ));
         uint256 flagsAndAmount;
-        bool fullFill;
+        uint256 fillMakerAmount;
         {
             uint256 amount = IERC20(order.takerAsset).balanceOf(address(this));
             if (amount > order.takerAmount) {
@@ -204,16 +205,17 @@ contract PMMAdapter {
             require(amount > 0, "Zero balance of PMM adapter");
             SafeERC20.safeApprove(IERC20(order.takerAsset), pool, amount);
             flagsAndAmount = (signatureType == uint256(SignatureType.EIP1271) ? 1 << 254 : 0) + amount;
-            fullFill = (amount == order.takerAmount);
+            fillMakerAmount =
+                amount == order.takerAmount ? order.makerAmount : amount * order.makerAmount / order.takerAmount;
         }
 
         // Pass the already-decoded confidence fields through so the fallback balance
         // check never has to re-decode the whole order on the failure path.
         MakerBalanceCheck memory balanceCheck = MakerBalanceCheck({
-            enabled: order.usePermit2 && order.permit2Signature.length > 0 && fullFill,
+            enabled: order.usePermit2 && order.permit2Signature.length > 0,
             makerAsset: order.makerAsset,
             maker: order.makerAddress,
-            makerAmount: order.makerAmount,
+            makerAmount: fillMakerAmount,
             confidenceT: order.confidenceT,
             confidenceWeight: order.confidenceWeight,
             confidenceCap: order.confidenceCap
@@ -259,7 +261,7 @@ contract PMMAdapter {
         _PMMSwap(to, pool, moreInfo, payerOrigin);
     }
 
-    /// @dev Legacy 3-arg entry point (V1 / non-Permit2 / partial-fill). Forwards with the
+    /// @dev Legacy 3-arg entry point (V1 / non-Permit2). Forwards with the
     /// maker-balance recheck disabled, so behavior is byte-for-byte identical to before.
     function _call(address target, bytes memory data, uint256 rfqId) internal {
         _call(target, data, rfqId, MakerBalanceCheck(false, address(0), address(0), 0, 0, 0, 0));
@@ -348,14 +350,14 @@ contract PMMAdapter {
             revert(string(abi.encodePacked("RFQ_ConfidenceCapExceeded ", rfqId.toString())));
         } else {
             // Fallback: the underlying revert selector matched none of the known cases above.
-            // Only for enabled (Permit2 full-fill) orders do we attempt a read-only maker
+            // Only for enabled (Permit2) orders do we attempt a read-only maker
             // balance recheck to attribute the failure to insufficient maker balance.
             if (balanceCheck.enabled) {
                 (uint256 balance, bool ok) = _safeBalanceOf(balanceCheck.makerAsset, balanceCheck.maker);
-                // Stage 1: compare against the full makerAmount. If the maker can cover the
-                // full payout, the failure is unrelated to balance → keep RFQ_Failed.
+                // Stage 1: compare against the fill's makerAmount. If the maker can cover the
+                // payout, the failure is unrelated to balance → keep RFQ_Failed.
                 if (ok && balance < balanceCheck.makerAmount) {
-                    // Stage 2: below the full amount → recompute the confidence-adjusted
+                    // Stage 2: below the payout → recompute the confidence-adjusted
                     // (time-slippage) threshold and compare against that. V2 orders carry
                     // zeroed confidence inputs, so the helper returns makerAmount unchanged.
                     uint256 required = _getMakerAmountForBalanceCheck(
