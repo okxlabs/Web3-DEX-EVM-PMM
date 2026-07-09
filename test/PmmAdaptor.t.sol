@@ -378,7 +378,7 @@ contract PmmAdaptorTest is Test {
             FR-3  Backward compatibility & safe degrade
     //////////////////////////////////////////////////////////////*/
 
-    // FR-3-AC-2: legacy 3-arg path (V1 / non-Permit2 / partial-fill) never enables the
+    // FR-3-AC-2: legacy 3-arg path (V1 / non-Permit2) never enables the
     // recheck → even with zero maker balance the result is the unchanged RFQ_Failed.
     function testFR3_AC2_LegacyCallNeverReattributes() public {
         makerToken.setBalance(maker, 0);
@@ -515,14 +515,41 @@ contract PmmAdaptorTest is Test {
         adapter.sellBase(taker, address(pool), _moreInfoV3(order));
     }
 
-    // V3 Permit2 partial-fill (adapter holds < takerAmount) → fullFill=false → recheck DISABLED.
-    function testE2E_V3Permit2PartialFillDisablesRecheck() public {
+    // V3 Permit2 partial-fill → recheck ENABLED, threshold pro-rated: 50e18.
+    function testE2E_V3Permit2PartialFillBalanceBelowProratedAttributes() public {
         takerToken.mint(address(adapter), TAKER_AMOUNT / 2); // partial-fill
-        makerToken.setBalance(maker, 0);
+        makerToken.setBalance(maker, MAKER_AMOUNT / 2 - 1);
+        pool.setRevertData(abi.encodePacked(SEL_UNKNOWN));
+
+        IPMMProtocolV3.OrderRFQ memory order = _buildV3Order(true, true);
+        _expectRevertString(_safeTransferFromFailedMsg());
+        adapter.sellBase(taker, address(pool), _moreInfoV3(order));
+    }
+
+    // Balance covers the pro-rated payout (though < full makerAmount) → stays RFQ_Failed.
+    function testE2E_V3Permit2PartialFillBalanceCoversProratedStaysRfqFailed() public {
+        takerToken.mint(address(adapter), TAKER_AMOUNT / 2); // partial-fill
+        makerToken.setBalance(maker, MAKER_AMOUNT / 2);
         pool.setRevertData(abi.encodePacked(SEL_UNKNOWN));
 
         IPMMProtocolV3.OrderRFQ memory order = _buildV3Order(true, true);
         _expectRevertString(_rfqFailedMsg());
+        adapter.sellBase(taker, address(pool), _moreInfoV3(order));
+    }
+
+    // Partial-fill + confidence: threshold = 50e18 * (1 - 5%) = 47.5e18.
+    function testE2E_V3Permit2PartialFillWithConfidenceUsesAdjustedProratedThreshold() public {
+        vm.warp(NOW_TS);
+        takerToken.mint(address(adapter), TAKER_AMOUNT / 2); // partial-fill
+        makerToken.setBalance(maker, 47.5 ether - 1);
+        pool.setRevertData(abi.encodePacked(SEL_UNKNOWN));
+
+        IPMMProtocolV3.OrderRFQ memory order = _buildV3Order(true, true);
+        order.confidenceT = NOW_TS - CONF_TIME_DIFF;
+        order.confidenceWeight = CONF_WEIGHT;
+        order.confidenceCap = CONF_CAP;
+
+        _expectRevertString(_safeTransferFromFailedMsg());
         adapter.sellBase(taker, address(pool), _moreInfoV3(order));
     }
 
