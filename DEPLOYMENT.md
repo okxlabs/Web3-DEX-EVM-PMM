@@ -1,10 +1,20 @@
 # Deployed Addresses
 
-This document lists the official contract deployments across supported chains. **V3 is the latest and actively maintained version.**
+This document lists the official contract deployments across supported chains. **V4 is the latest and actively maintained version** (caller-bound orders with `allowedSender`, EIP-712 domain version `1.2`).
 
 ## PmmProtocol
 
-### V3 (Current)
+### V4 (Current)
+
+| Chain | Address | Explorer |
+|-------|---------|----------|
+| Ethereum Mainnet | `0x73b920dC64ab6156f2D22b85AB9A9b06E597e154` | [Etherscan](https://etherscan.io/address/0x73b920dC64ab6156f2D22b85AB9A9b06E597e154) |
+| Arbitrum One | `0x2C5486E06dB4F72E3eFd6bdd891Af50ee75b7e9e` | [Arbiscan](https://arbiscan.io/address/0x2C5486E06dB4F72E3eFd6bdd891Af50ee75b7e9e) |
+| Base | `0x9ECb5cf09eBb1Cb844b8e2C8cc7cB8b57643C6C8` | [Basescan](https://basescan.org/address/0x9ECb5cf09eBb1Cb844b8e2C8cc7cB8b57643C6C8) |
+| BNB Chain | `0x8A35eE6d2d533e6b2934ceD4aff0aDd0C7af1769` | [BscScan](https://bscscan.com/address/0x8A35eE6d2d533e6b2934ceD4aff0aDd0C7af1769) |
+| XLayer | `0x31d7BCA06a0143ABc7c93418792Aae8AA69183b0` | [OKLink](https://www.oklink.com/x-layer/evm/address/0x31d7bca06a0143abc7c93418792aae8aa69183b0) |
+
+### V3
 
 | Chain | Address | Explorer |
 |-------|---------|----------|
@@ -34,7 +44,17 @@ This document lists the official contract deployments across supported chains. *
 
 ## PmmAdaptor
 
-### V3 (Current)
+### V4 (Current)
+
+| Chain | Address | Explorer |
+|-------|---------|----------|
+| Ethereum Mainnet | `0x4ecD468E1010E006f768EC034e5a6d8803183469` | [Etherscan](https://etherscan.io/address/0x4ecD468E1010E006f768EC034e5a6d8803183469) |
+| Arbitrum One | `0x34fDA863Bfef0F976F5d0a0e366BC44883296Cf7` | [Arbiscan](https://arbiscan.io/address/0x34fDA863Bfef0F976F5d0a0e366BC44883296Cf7) |
+| Base | `0x22eef0C15678c482DcAC05c0d102363fc31f8C81` | [Basescan](https://basescan.org/address/0x22eef0C15678c482DcAC05c0d102363fc31f8C81) |
+| BNB Chain | `0x9a8d68089aDBe8428f79c244d34276a9f4251070` | [BscScan](https://bscscan.com/address/0x9a8d68089aDBe8428f79c244d34276a9f4251070) |
+| XLayer | `0xa6566f0689a9ec2fdff3f6fd3ed58b227246765c` | [OKLink](https://www.oklink.com/x-layer/evm/address/0xa6566f0689a9ec2fdff3f6fd3ed58b227246765c) |
+
+### V3
 
 | Chain | Address | Explorer |
 |-------|---------|----------|

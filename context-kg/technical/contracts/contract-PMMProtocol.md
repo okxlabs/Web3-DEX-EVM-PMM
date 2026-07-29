@@ -1,11 +1,11 @@
 ---
 name: "contract-PMMProtocol"
-description: "Main RFQ settlement contract — OKX caller binding (CallerAuth) on the single fillOrderRFQTo entry, verifies maker signatures, transfers funds, tracks invalidator bitmap, applies time-slippage"
+description: "Main RFQ settlement contract — caller authorization on the single fillOrderRFQTo entry, maker signature verification, fund transfer, invalidator bitmap, and time-slippage"
 type: "design"
 title: "Contract: PMMProtocol"
-tags: ["PMMProtocol", "settlement", "CallerAuth", "caller-binding", "fillOrderRFQTo", "orderType-4", "version-1.2", "anti-toxic-flow", "SCDEX-1157"]
+tags: ["PMMProtocol", "settlement", "CallerAuth", "caller-binding", "fillOrderRFQTo", "orderType-4", "version-1.2", "anti-toxic-flow"]
 sources: ["src/PmmProtocol.sol", "src/libraries/CallerAuth.sol", "src/OrderRFQLib.sol", "src/libraries/Errors.sol"]
-last_updated: "2026-07-05"
+last_updated: "2026-07-27"
 ---
 
 # Contract: PMMProtocol
@@ -14,7 +14,7 @@ Source: `src/PmmProtocol.sol` (pragma `0.8.17`). Solidity name: `contract PMMPro
 
 ## Purpose
 
-`PMMProtocol` is the on-chain settlement endpoint for OKX Labs PMM RFQ orders. Since SCDEX-1157 the settlement entry is a **single** function, `fillOrderRFQTo`, whose first line binds the caller to an OKX-backend signature (`CallerAuth._verifyCallerAuth`, `allowedCallers == [PmmAdapter]`). After caller binding it verifies the maker signature, applies amount math + settlement guardrails + time-slippage, transfers the maker leg (via standard ERC-20, Permit2 allowance, Permit2 signature, or Permit2 witness), optionally unwraps WETH for the maker leg, and transfers the taker leg. The protocol performs **no** `allowedSender` check — that anti-toxic check lives in `PMMAdapter` (orderType=4).
+`PMMProtocol` is the on-chain settlement endpoint for PMM RFQ orders. Its single settlement function, `fillOrderRFQTo`, first validates `order.rfqId <= type(uint64).max` (else `RFQ_InvalidRfqId`), then verifies caller authorization over the exact order. It then verifies the maker signature, applies amount math, settlement guardrails and time-slippage, transfers the maker leg, optionally unwraps WETH, and transfers the taker leg. The protocol performs **no** `allowedSender` check; that check lives in `PMMAdapter` orderType=4.
 
 ## Inheritance
 
@@ -23,7 +23,7 @@ Source: `src/PmmProtocol.sol` (pragma `0.8.17`). Solidity name: `contract PMMPro
 | Parent | Provides |
 |--------|----------|
 | `EIP712` (abstract) | Cached EIP-712 domain separator, `_domainSeparatorV4`, `_hashTypedDataV4`. Only immutables, no storage slots. |
-| `CallerAuth` (abstract) | **NEW (SCDEX-1157).** OKX caller binding: immutable `OKX_SIGNER`, `_verifyCallerAuth`, `isNonceUsed`, append-only nonce bitmap (`_callerAuthNonceBitmap`, slot 0). See [[contract-CallerAuth]]. |
+| `CallerAuth` (abstract) | Caller authorization: immutable `AUTH_SIGNER`, `_verifyCallerAuth`, `isNonceUsed`, append-only nonce bitmap (`_callerAuthNonceBitmap`, slot 0). See [[contract-CallerAuth]]. |
 | `ReentrancyGuard` (OpenZeppelin 4.8.1) | `nonReentrant` modifier — `_status` storage slot 1 |
 
 ## State Variables
@@ -32,13 +32,13 @@ Storage layout verified via `forge inspect PMMProtocol storageLayout` — note t
 
 | Variable | Type | Slot | Mutable | Purpose |
 |----------|------|------|---------|---------|
-| `_callerAuthNonceBitmap` | `mapping(uint256 => uint256)` | 0 | Yes (set bits monotonically) | Inherited from `CallerAuth`. Permit2-style single-use nonce bitmap for OKX caller-auth. Word = `nonce >> 8`, bit = `nonce & 0xff`. |
+| `_callerAuthNonceBitmap` | `mapping(uint256 => uint256)` | 0 | Yes (set bits monotonically) | Inherited from `CallerAuth`. Permit2-style single-use nonce bitmap for caller-auth. Word = `nonce >> 8`, bit = `nonce & 0xff`. |
 | `_status` | `uint256` | 1 | Yes (within tx) | Inherited from `ReentrancyGuard`. |
 | `_invalidator` | `mapping(address => mapping(uint256 => uint256))` | 2 | Yes (set bits monotonically) | Per-maker 256-bit bitmap of used / cancelled rfqIds. Inner key = `rfqId >> 8`; bit = `uint8(rfqId)`. |
-| `OKX_SIGNER` | `address` | immutable | No | Inherited from `CallerAuth`. OKX caller-auth signer; zero rejected at deploy (`OSA_ZeroSigner`). |
+| `AUTH_SIGNER` | `address` | immutable | No | Inherited from `CallerAuth`. Caller-auth signer; zero rejected at deploy (`AUTH_ZeroSigner`). |
 | `_WETH` | `IWETH` | immutable | No | WETH9 address for this chain. |
 
-Constants (`PmmProtocol.sol:59-74`):
+Constants (`PmmProtocol.sol:61-73`):
 
 | Constant | Value | Purpose |
 |----------|-------|---------|
@@ -55,12 +55,12 @@ Constants (`PmmProtocol.sol:59-74`):
 
 ## Access Control
 
-Besides OpenZeppelin's `nonReentrant`, settlement is now gated by the inherited **caller binding** — `fillOrderRFQTo` calls `_verifyCallerAuth(allowedCallers, nonce, expiry, okxSig)` on its first line. Authorization therefore has two axes: *who may call* (OKX-signed `allowedCallers == [PmmAdapter]`, enforced by `CallerAuth`) and *whose quote is filled* (the maker's EIP-712 signature + per-maker invalidator bitmap). There is still no owner/admin role.
+Besides OpenZeppelin's `nonReentrant`, settlement is now gated by the inherited **caller binding** — `fillOrderRFQTo` calls `_verifyCallerAuth(keccak256(abi.encode(order)), allowedCallers, nonce, authSig)` early, right after the initial `order.rfqId` range check. Authorization therefore has two axes: *who may call* (signed `allowedCallers == [PmmAdapter]`, enforced by `CallerAuth`) and *which exact order may be settled* (`payloadHash = keccak256(abi.encode(order))`, plus the maker's EIP-712 signature + per-maker invalidator bitmap). There is still no owner/admin role.
 
 | Guard | Condition | Protects |
 |-------|-----------|----------|
 | `nonReentrant` (OZ) | `_status != _ENTERED` | `fillOrderRFQTo` |
-| `_verifyCallerAuth` (CallerAuth) | `msg.sender ∈ allowedCallers` + valid unexpired unused OKX `okxSig` | `fillOrderRFQTo` — first line; else `OSA_UntrustedCaller` / `OSA_BadOkxSig` / `OSA_Expired` / `OSA_NonceUsed` / `OSA_BadSigLen` |
+| `_verifyCallerAuth` (CallerAuth) | `msg.sender ∈ allowedCallers` + valid unused `authSig` bound to `keccak256(abi.encode(order))` | `fillOrderRFQTo` — early, after the rfqId range check; else `AUTH_UntrustedCaller` / `AUTH_BadAuthSig` / `AUTH_NonceUsed` / `AUTH_BadSigLen` |
 
 `cancelOrderRFQ` is **not** `nonReentrant` and is **not** caller-bound; it only writes to `_invalidator[msg.sender][...]` and emits an event, with no external calls (a maker cancels their own rfqId directly).
 
@@ -71,15 +71,15 @@ External / public:
 | Function | Mutability | Modifiers | Description |
 |----------|-----------|-----------|-------------|
 | `DOMAIN_SEPARATOR()` | view | — | Returns `_domainSeparatorV4()` (EIP-712 domain separator). Selector `0x3644e515`. |
-| `OKX_SIGNER()` | view | — | Inherited from `CallerAuth`. Immutable OKX caller-auth signer. Selector `0x6c26f9cc`. |
+| `AUTH_SIGNER()` | view | — | Inherited from `CallerAuth`. Immutable caller-auth signer. Selector `0x0a5c9024`. |
 | `isNonceUsed(uint256 nonce)` | view | — | Inherited from `CallerAuth`. `true` if the caller-auth nonce is already consumed. Selector `0x5d00bb12`. |
 | `invalidatorForOrderRFQ(address maker, uint256 slot)` | view | — | Returns the raw 256-bit invalidator slot for a maker. Selector `0x56f16124`. |
 | `isRfqIdUsed(address maker, uint64 rfqId)` | view | — | Returns `true` if the bit for `(maker, rfqId)` is set. Selector `0x2154dec0`. |
-| `fillOrderRFQTo(OrderRFQ order, bytes signature, uint256 flagsAndAmount, address target, address[] allowedCallers, uint256 nonce, uint256 expiry, bytes okxSig)` | payable | `nonReentrant` | **The single settlement entry** (selector `0x33cb6b23`). First line `_verifyCallerAuth(allowedCallers, nonce, expiry, okxSig)` (caller binding). Then verifies the maker sig (EOA or ERC-1271), settles, emits `OrderFilledRFQ`. Returns `(filledMakerAmount, filledTakerAmount, orderHash)`. **`order` is the 15-field OrderRFQ (incl. `allowedSender`)**; the protocol does not itself check `allowedSender`. |
+| `fillOrderRFQTo(OrderRFQ order, bytes signature, uint256 flagsAndAmount, address target, address[] allowedCallers, uint256 nonce, bytes authSig)` | payable | `nonReentrant` | **The single settlement entry**. First rejects `order.rfqId > type(uint64).max` (`RFQ_InvalidRfqId`, before caller auth so no nonce is consumed), then `_verifyCallerAuth(keccak256(abi.encode(order)), allowedCallers, nonce, authSig)` (caller binding scoped to the exact order). Then verifies the maker sig (EOA or ERC-1271), settles, emits `OrderFilledRFQ`. Returns `(filledMakerAmount, filledTakerAmount, orderHash)`. **`order` is the 15-field OrderRFQ (incl. `allowedSender`)**; the protocol does not itself check `allowedSender`. |
 | `cancelOrderRFQ(uint64 rfqId)` | nonpayable | — | Maker (`msg.sender`) flips the bit for `rfqId`. Reverts `RFQ_OrderAlreadyCancelledOrUsed` if already set. Emits `OrderCancelledRFQ`. Selector `0x76ef573a`. Not caller-bound. |
 | `receive()` | payable | — | Accepts ETH **only** when `msg.sender == address(_WETH)` (i.e., WETH refund during unwrap). Otherwise reverts `RFQ_EthDepositRejected`. |
 
-> **Removed by SCDEX-1157** (breaking): `fillOrderRFQ`, `fillOrderRFQCompact`, and `fillOrderRFQToWithPermit` no longer exist. All settlement is converged onto the single caller-bound `fillOrderRFQTo` above. Off-chain integrators, `script/*.js`, and the `/pmm-settle` skill must migrate.
+`fillOrderRFQ`, `fillOrderRFQCompact`, and `fillOrderRFQToWithPermit` do not exist in the current interface. Settlement uses the single caller-bound `fillOrderRFQTo` above.
 
 Private:
 
@@ -92,20 +92,20 @@ Private:
 
 | Event | Emitted When | Indexed Fields |
 |-------|--------------|----------------|
-| `OrderFilledRFQ(uint256 rfqId, uint256 expiry, address makerAsset, address takerAsset, address makerAddress, uint256 expectedMakerAmount, uint256 expectedTakerAmount, uint256 filledMakerAmount, uint256 filledTakerAmount, bool usePermit2, bytes permit2Signature, bytes32 permit2Witness, string permit2WitnessType)` | A fill succeeds in `fillOrderRFQTo` (the only fill entry). Both quoted and actual filled amounts are reported. Event shape unchanged by SCDEX-1157 (no `allowedSender` field added to the event). | `rfqId`, `makerAsset`, `takerAsset` |
+| `OrderFilledRFQ(uint256 rfqId, uint256 expiry, address makerAsset, address takerAsset, address makerAddress, address allowedSender, uint256 expectedMakerAmount, uint256 expectedTakerAmount, uint256 filledMakerAmount, uint256 filledTakerAmount, bool usePermit2, bytes permit2Signature, bytes32 permit2Witness, string permit2WitnessType)` | A fill succeeds in `fillOrderRFQTo`. Both quoted and actual filled amounts are reported, along with the order's `allowedSender` binding (non-indexed; enforcement happens in the adapter). | `rfqId`, `makerAsset`, `takerAsset` |
 | `OrderCancelledRFQ(uint256 rfqId, address maker)` | Maker successfully invalidates an rfqId via `cancelOrderRFQ`. | `rfqId`, `maker` |
 
 ## Custom Errors
 
-See `terminology.md` for the complete `Errors.sol` table. All `RFQ_*` errors that originate in `PMMProtocol` carry `uint256 rfqId`, except `RFQ_EthDepositRejected()` (no parameters).
+See `terminology.md` for the complete `Errors.sol` table. All `RFQ_*` errors that originate in `PMMProtocol` carry `uint256 rfqId`, except `RFQ_EthDepositRejected()` (no parameters). `RFQ_InvalidRfqId(uint256 rfqId)` is thrown first thing in `fillOrderRFQTo` when `order.rfqId > type(uint64).max` (the invalidator bitmap keys off the low 64 bits only).
 
-Inherited from `CallerAuth` (all parameterless), surfaced by the first-line `_verifyCallerAuth`: `OSA_ZeroSigner` (deploy-time), `OSA_BadSigLen`, `OSA_BadOkxSig`, `OSA_Expired`, `OSA_UntrustedCaller`, `OSA_NonceUsed`. Verified present in the PMMProtocol ABI via `forge inspect PMMProtocol abi`.
+Inherited from `CallerAuth` (all parameterless), surfaced by the early `_verifyCallerAuth`: `AUTH_ZeroSigner` (deploy-time), `AUTH_BadSigLen`, `AUTH_BadAuthSig`, `AUTH_UntrustedCaller`, `AUTH_NonceUsed`.
 
 Note: **`RFQ_BadSender` is NOT thrown by `PMMProtocol`** — it is confirmed absent from the PMMProtocol ABI. The `allowedSender` anti-toxic check lives only in `PMMAdapter` (orderType=4).
 
 ## Security Patterns Used
 
-- **OKX caller binding (`CallerAuth`)** — `fillOrderRFQTo` verifies the OKX-signed `(allowedCallers, nonce, expiry)` tuple on its first line; only `[PmmAdapter]` may reach settlement, closing the direct-call bypass. Nonce is consumed (CEI) before any transfer.
+- **Caller authorization (`CallerAuth`)** — `fillOrderRFQTo` verifies the signed `(payloadHash, allowedCallers, nonce)` tuple right after the rfqId range check; `payloadHash = keccak256(abi.encode(order))`. The nonce is consumed before any transfer.
 - `ReentrancyGuard` (OpenZeppelin) — `fillOrderRFQTo` is `nonReentrant`; needed because `_fillOrderRFQTo` performs external token transfers and a low-level ETH `.call` to `target`.
 - EIP-712 typed-data signing — cached domain separator from `EIP712.sol`, struct hash from `OrderRFQLib`.
 - ECDSA + ERC-1271 fan-out — `ECDSA.recoverOrIsValidSignature` accepts both EOA and contract signers; bits 254/253 of `flagsAndAmount` allow callers to opt into pure ERC-1271 verification and 65-byte length enforcement.
@@ -113,7 +113,7 @@ Note: **`RFQ_BadSender` is NOT thrown by `PMMProtocol`** — it is confirmed abs
 - RFQ-ID invalidator bitmap — single-use enforcement per `(maker, rfqId)`.
 - Settlement guardrail — 60% minimum fill prevents dust attacks / price manipulation through tiny partial fills.
 - Confidence reduction — bounded by `_CONFIDENCE_CAP_LIMIT = 5%` so makers cannot encode unbounded slippage.
-- `msg.value` reconciled per leg — non-WETH taker asset requires `msg.value == 0`; WETH taker asset requires `msg.value == takerAmount`.
+- `msg.value` reconciled per leg — non-WETH taker asset requires `msg.value == 0`; WETH taker asset paid with native ETH (`msg.value > 0`) requires `msg.value == takerAmount`, otherwise (`msg.value == 0`) WETH is pulled as a plain ERC-20.
 
 ## Key Invariants
 
@@ -122,6 +122,6 @@ Note: **`RFQ_BadSender` is NOT thrown by `PMMProtocol`** — it is confirmed abs
 - [Rule] `_fillOrderRFQTo` invalidates the rfqId **before** transferring any funds.
 - [Rule] `receive()` accepts ETH only from `_WETH` — every other caller reverts with `RFQ_EthDepositRejected`.
 - [Rule] `nonReentrant` guards the fill path; `cancelOrderRFQ` does not need it (no external calls).
-- [Rule] `fillOrderRFQTo` runs `_verifyCallerAuth` **before** computing the order hash or touching funds; `msg.sender` must be in the OKX-signed `allowedCallers` (`[PmmAdapter]`).
-- [Rule] `OKX_SIGNER` is immutable and non-zero (deploy rejects zero via `OSA_ZeroSigner`); there is no setter.
-- [Rule] The protocol performs **no** `allowedSender` check (FR-5-AC-8) — verified: `RFQ_BadSender` is not in the PMMProtocol ABI. The anti-toxic `allowedSender == dexRouterCaller` check is `PMMAdapter`'s responsibility.
+- [Rule] `fillOrderRFQTo` runs `_verifyCallerAuth` **before** computing the order hash or touching funds; `msg.sender` must be in the signed `allowedCallers` (`[PmmAdapter]`).
+- [Rule] `AUTH_SIGNER` is immutable and non-zero (deploy rejects zero via `AUTH_ZeroSigner`); there is no setter.
+- [Rule] The protocol performs **no** `allowedSender` check — `RFQ_BadSender` is not in the PMMProtocol ABI. The `allowedSender == dexRouterCaller` check is `PMMAdapter`'s responsibility.

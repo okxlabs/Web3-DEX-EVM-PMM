@@ -30,7 +30,7 @@ All `immutable`, set in the constructor — none of them appear in `storage-layo
 | `_CACHED_CHAIN_ID` | `uint256` | No | `block.chainid` at construction; rebuild trigger. |
 | `_CACHED_THIS` | `address` | No | `address(this)` at construction; rebuild trigger. |
 | `_HASHED_NAME` | `bytes32` | No | `keccak256(bytes(name))` — set by inheritor (`PMMProtocol` passes `"OKX Labs PMM Protocol"`). |
-| `_HASHED_VERSION` | `bytes32` | No | `keccak256(bytes(version))` — set by inheritor (`PMMProtocol` passes `"1.2"` as of SCDEX-1157; was `"1.1"`). |
+| `_HASHED_VERSION` | `bytes32` | No | `keccak256(bytes(version))` — `PMMProtocol` passes `"1.2"`. |
 | `_TYPE_HASH` | `bytes32` | No | `keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)")`. |
 
 ## Access Control

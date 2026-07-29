@@ -107,11 +107,11 @@ contract PmmProtocolPermitWitnessFork is TestHelper {
         emit log_named_bytes("orderSignature", orderSignature);
 
         // Execute
-        (address[] memory allowedCallers, uint256 authNonce, uint256 authExpiry, bytes memory okxSig) =
-            _callerAuth(TAKER_ADDRESS1, address(pool));
+        (address[] memory allowedCallers, uint256 authNonce, bytes memory authSig) =
+            _callerAuth(TAKER_ADDRESS1, address(pool), keccak256(abi.encode(order)));
         vm.startPrank(TAKER_ADDRESS1);
         pool.fillOrderRFQTo(
-            order, orderSignature, order.takerAmount, TAKER_ADDRESS1, allowedCallers, authNonce, authExpiry, okxSig
+            order, orderSignature, order.takerAmount, TAKER_ADDRESS1, allowedCallers, authNonce, authSig
         );
 
         // Verify Balances
@@ -205,11 +205,11 @@ contract PmmProtocolPermitWitnessFork is TestHelper {
         bytes memory orderSignature = signOrder(order, pool.DOMAIN_SEPARATOR(), PK);
         emit log_named_bytes("orderSignature", orderSignature);
 
-        (address[] memory allowedCallers, uint256 authNonce, uint256 authExpiry, bytes memory okxSig) =
-            _callerAuth(deployer, address(pool));
+        (address[] memory allowedCallers, uint256 authNonce, bytes memory authSig) =
+            _callerAuth(deployer, address(pool), keccak256(abi.encode(order)));
         vm.startBroadcast(deployer);
         pool.fillOrderRFQTo(
-            order, orderSignature, order.takerAmount, TAKER_ADDRESS1, allowedCallers, authNonce, authExpiry, okxSig
+            order, orderSignature, order.takerAmount, TAKER_ADDRESS1, allowedCallers, authNonce, authSig
         );
     }
 }

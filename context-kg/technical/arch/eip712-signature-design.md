@@ -1,18 +1,18 @@
 ---
 name: "eip712-signature-design"
-description: "EIP-712 typed-data signing architecture for OrderRFQ — domain separator, struct hash (15 fields incl. allowedSender), domain version 1.2, backend generation, and on-chain verification order"
+description: "EIP-712 typed-data signing architecture for OrderRFQ — domain separator, struct hash (15 fields incl. allowedSender), domain version 1.2, off-chain generation, and on-chain verification order"
 type: "design"
 title: "EIP-712 Signature Design"
-tags: ["eip712", "orderrfq", "typehash", "domain-separator", "allowedSender", "version-1.2", "anti-toxic-flow", "SCDEX-1157"]
+tags: ["eip712", "orderrfq", "typehash", "domain-separator", "allowedSender", "version-1.2", "anti-toxic-flow"]
 sources: ["src/OrderRFQLib.sol", "src/EIP712.sol", "src/PmmProtocol.sol"]
-last_updated: "2026-07-05"
+last_updated: "2026-07-27"
 ---
 
 # EIP-712 Signature Design
 
 `PMMProtocol` uses EIP-712 typed-data signatures as the maker-quote authorization mechanism. This document is the authority on how signatures are constructed, what each field covers, and how the contract verifies them.
 
-> **SCDEX-1157 (anti-toxic-flow) update.** `OrderRFQ` gained a required `address allowedSender` field (now **15 fields**), inserted between `usePermit2` and `confidenceT`. This changed the OrderRFQ typehash, so the EIP-712 domain **version was bumped `1.1 → 1.2`**; every outstanding `1.1` maker signature is invalid against the new contract (EIP-712 replay protection). Maker authorization is still EIP-712, but settlement is now additionally gated by an OKX-signed **caller binding** (`CallerAuth._verifyCallerAuth`) — see [[contract-CallerAuth]] and [[pmm_anti_toxic_flow]].
+`OrderRFQ` contains a required `address allowedSender` field (15 fields total), inserted between `usePermit2` and `confidenceT`. The EIP-712 domain version is `1.2`; signatures made for version `1.1` are invalid against the current contract. Maker authorization remains EIP-712, while settlement also requires caller authorization through `CallerAuth._verifyCallerAuth`.
 
 ---
 
@@ -21,8 +21,8 @@ last_updated: "2026-07-05"
 Built once at deploy time by the inherited `EIP712` constructor (see `EIP712.sol:52-63`), and rebuilt on the fly if `block.chainid` or `address(this)` ever differs (post-fork safety).
 
 ```solidity
-string private constant _NAME    = "OKX Labs PMM Protocol";   // PmmProtocol.sol:59
-string private constant _VERSION = "1.2";                      // PmmProtocol.sol:63 (was "1.1")
+string private constant _NAME    = "OKX Labs PMM Protocol";   // PmmProtocol.sol:61
+string private constant _VERSION = "1.2";                      // PmmProtocol.sol:62 (was "1.1")
 ```
 
 Effective domain:
@@ -63,7 +63,7 @@ bytes32 internal constant _LIMIT_ORDER_RFQ_TYPEHASH =
         "uint256 makerAmount,"
         "uint256 takerAmount,"
         "bool usePermit2,"
-        "address allowedSender,"      // NEW (SCDEX-1157) — required non-zero
+        "address allowedSender,"
         "uint256 confidenceT,"
         "uint256 confidenceWeight,"
         "uint256 confidenceCap,"
@@ -84,7 +84,7 @@ bytes32 internal constant _LIMIT_ORDER_RFQ_TYPEHASH =
 | 6 | `makerAmount` | `uint256` | direct | Quoted maker size. |
 | 7 | `takerAmount` | `uint256` | direct | Quoted taker size. |
 | 8 | `usePermit2` | `bool` | direct (padded to 32 bytes) | Switches maker leg between standard `safeTransferFrom` and Permit2. |
-| 9 | `allowedSender` | `address` | direct (padded to 32 bytes) | **NEW (SCDEX-1157).** The address for which the maker quoted; required non-zero. Bound into the digest so it cannot be swapped post-signing. Verified in PMMAdapter (orderType=4) against the outermost DexRouter caller — see [[pmm_anti_toxic_flow]]. |
+| 9 | `allowedSender` | `address` | direct (padded to 32 bytes) | The address for which the maker quoted; required non-zero by PMMAdapter orderType=4 and compared with the outermost router caller. |
 | 10 | `confidenceT` | `uint256` | direct | Time-slippage activation timestamp. |
 | 11 | `confidenceWeight` | `uint256` | direct | Reduction rate per second (1e6 units). |
 | 12 | `confidenceCap` | `uint256` | direct | Maximum reduction (1e6 units; on-chain cap 50000 = 5%). |
@@ -122,7 +122,7 @@ bytes32 digest = ECDSA.toTypedDataHash(domainSeparator, structHash);  // "\x19\x
 
 ---
 
-## 3. Backend Signature Generation
+## 3. Off-Chain Signature Generation
 
 Reference JS implementation: `script/signOrderRFQ.js` (mirrors the Solidity hashing logic). Steps:
 
@@ -134,7 +134,7 @@ Reference JS implementation: `script/signOrderRFQ.js` (mirrors the Solidity hash
 5. signature = abi.encodePacked(r, s, v)   // 65 bytes
 ```
 
-> The OKX-backend **caller-auth** signature (`okxSig`) is a separate signature over `(address(this), allowedCallers, nonce, expiry, block.chainid)`, EIP-191 prefixed and EIP-2098 64-byte compact. It is NOT the maker OrderRFQ signature and does NOT use this EIP-712 domain. See [[contract-CallerAuth]].
+> The **caller-auth** signature (`authSig`) is a separate signature over `(address(this), payloadHash, allowedCallers, nonce, block.chainid)`, EIP-191 prefixed and EIP-2098 64-byte compact. For PMM Adapter/Protocol, `payloadHash = keccak256(abi.encode(order))`. It is NOT the maker OrderRFQ signature and does NOT use this EIP-712 domain. See [[contract-CallerAuth]].
 
 If the maker is a smart-contract signer (ERC-1271), set bit 254 (`_SIGNER_SMART_CONTRACT_HINT`) on `flagsAndAmount` so the protocol skips `ecrecover` and calls `IERC1271.isValidSignature(orderHash, signature)`. Set bit 253 (`_IS_VALID_SIGNATURE_65_BYTES`) only when the contract expects exactly 65 bytes — the protocol then enforces `signature.length == 65`.
 
@@ -153,7 +153,7 @@ Reversing the order produces a Permit2 signature that does not match the OrderRF
 
 ## 4. Confidence (Time-Slippage) Semantics
 
-`confidenceT`, `confidenceWeight`, `confidenceCap` are all part of the signed order — a maker cannot retroactively widen the cap after signing. On-chain logic (`PmmProtocol.sol:265-281`):
+`confidenceT`, `confidenceWeight`, `confidenceCap` are all part of the signed order — a maker cannot retroactively widen the cap after signing. On-chain logic (`PmmProtocol.sol:213-231`):
 
 ```
 if (confidenceT != 0 && block.timestamp > confidenceT) {
@@ -172,25 +172,29 @@ Only `makerAmount` is reduced; `takerAmount` is unchanged. The settlement-limit 
 
 ## 5. Verification Order (On-Chain)
 
-The settlement entry is now the **single** `fillOrderRFQTo(order, signature, flagsAndAmount, target, address[] allowedCallers, uint256 nonce, uint256 expiry, bytes okxSig)` (`src/PmmProtocol.sol:115-157`). `fillOrderRFQ` / `fillOrderRFQCompact` / `fillOrderRFQToWithPermit` were removed by SCDEX-1157.
+The settlement entry is the **single** `fillOrderRFQTo(order, signature, flagsAndAmount, target, address[] allowedCallers, uint256 nonce, bytes authSig)`. `fillOrderRFQ`, `fillOrderRFQCompact`, and `fillOrderRFQToWithPermit` are not present in the current interface.
 
 ```
-0. _verifyCallerAuth(allowedCallers, nonce, expiry, okxSig)   // FIRST LINE — OKX caller binding
-   - okxSig.length != 64                                 → OSA_BadSigLen
-   - recover(okxSig) != OKX_SIGNER                        → OSA_BadOkxSig
-   - block.timestamp > expiry (caller-auth expiry)        → OSA_Expired
-   - msg.sender ∉ allowedCallers (== [PmmAdapter])         → OSA_UntrustedCaller
-   - nonce already consumed                               → OSA_NonceUsed
+-1. rfqId range check (entry first statement, PmmProtocol.sol:115-117)
+   - order.rfqId > type(uint64).max                      → RFQ_InvalidRfqId(rfqId)
+0. _verifyCallerAuth(keccak256(abi.encode(order)), allowedCallers, nonce, authSig)
+                                                             // Caller authorization, after the rfqId range check
+   - authSig.length != 64                                → AUTH_BadSigLen
+   - recover(authSig) != AUTH_SIGNER                     → AUTH_BadAuthSig
+   - msg.sender ∉ allowedCallers (== [PmmAdapter])         → AUTH_UntrustedCaller
+   - nonce already consumed                               → AUTH_NonceUsed
 1. orderHash = order.hash(_domainSeparatorV4())          // EIP-712 digest
 2. Signature path (selected by flagsAndAmount):
    - SIGNER_SMART_CONTRACT_HINT set + IS_VALID_SIGNATURE_65_BYTES set + signature.length != 65 → RFQ_BadSignature
    - SIGNER_SMART_CONTRACT_HINT set → ECDSA.isValidSignature(makerAddress, orderHash, signature)
-                                       (or .isValidSignature65 for the compact entrypoint)
+                                       (65-byte enforcement is done by the _IS_VALID_SIGNATURE_65_BYTES
+                                        flag inside this single entrypoint — there is no separate
+                                        compact entrypoint or isValidSignature65 call)
    - Otherwise → ECDSA.recoverOrIsValidSignature(makerAddress, orderHash, signature)
    - Any failure → RFQ_BadSignature(rfqId)
 3. Enter _fillOrderRFQTo:
    3a. target == 0                                       → RFQ_ZeroTargetIsForbidden
-   3b. block.timestamp > expiry                          → RFQ_OrderExpired
+   3b. block.timestamp > order.expiry                    → RFQ_OrderExpired
    3c. _invalidateOrder(maker, rfqId, 0)                 → RFQ_InvalidatedOrder if bit already set
    3d. derive (makerAmount, takerAmount) from flagsAndAmount via AmountCalculator
         - amount > makerAmount                           → RFQ_MakerAmountExceeded
@@ -233,12 +237,11 @@ State update and transfer last (CEI):
 
 ## 6. Key Constraints
 
-- [Rule] Changing `_NAME` or `_VERSION` invalidates **every** outstanding maker signature — coordinate with backend before deploying any new domain. The `1.1 → 1.2` bump (SCDEX-1157) already invalidated all pre-existing `1.1` signatures.
+- [Rule] Changing `_NAME` or `_VERSION` invalidates **every** outstanding maker signature and requires coordinated signer updates. The `1.1 → 1.2` bump invalidated all `1.1` signatures.
 - [Rule] `allowedSender` is part of the signed struct — a maker signs a quote for a specific taker address; it cannot be altered after signing without breaking the digest. The equality check `allowedSender == dexRouterCaller` is enforced in PMMAdapter, not in this EIP-712 layer (see [[pmm_anti_toxic_flow]]).
-- [Rule] Reaching settlement requires TWO independent authorizations: the maker's EIP-712 OrderRFQ signature AND the OKX-backend caller-auth `okxSig` (verified first, before the maker sig). See [[contract-CallerAuth]].
+- [Rule] Reaching settlement requires TWO independent authorizations: the maker's EIP-712 OrderRFQ signature AND the caller-auth `authSig` (verified first, before the maker sig). See [[contract-CallerAuth]].
 - [Rule] Each `PMMProtocol` deployment has its own domain separator (bound to `address(this)`) — signatures are not portable across chains or instances.
 - [Rule] `keccak256(permit2Signature)` is part of the OrderRFQ struct hash, so the Permit2 signature **must** be signed before the OrderRFQ signature.
 - [Rule] If `flagsAndAmount` sets `_SIGNER_SMART_CONTRACT_HINT`, the contract calls `IERC1271.isValidSignature(orderHash, signature)` on `order.makerAddress` — the contract signer **must** return the `0x1626ba7e` magic value.
 - [Rule] The 64-vs-65-byte ECDSA signature malleability documented in `ECDSA.recover` is not exploitable here because each `(maker, rfqId)` pair is single-use via `_invalidator`.
-
-<!-- TODO: Confirm the exact Permit2 typed-data witness construction used by the off-chain signer matches keccak256 of the witness fields, not the witness type string itself -->
+- [Rule] `permit2Witness` is the keccak256 hash of the ABI-encoded witness fields. `permit2WitnessType` is a separate type string and is hashed independently in the OrderRFQ struct hash.

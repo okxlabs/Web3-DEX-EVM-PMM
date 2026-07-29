@@ -41,10 +41,10 @@ node script/testSignOrder.js
 
 ### Core Contracts
 
-- **`PmmProtocol.sol`** — Main settlement contract. Inherits `EIP712` + `ReentrancyGuard`. Handles order filling, signature verification (EOA + ERC-1271), Permit2 transfers, WETH unwrapping, and time-slippage.
-- **`OrderRFQLib.sol`** — Defines the `OrderRFQ` struct (14 fields) and its EIP-712 hash computation. The typehash and encoding logic must stay in sync with off-chain signing code.
-- **`PmmAdaptor.sol`** — DEX aggregator adapter. Supports V1/V2/V3 order formats for backward compatibility. Implements `sellBase()`/`sellQuote()` interface.
-- **`EIP712.sol`** — Domain separator with immutable caching. Domain: `name="OKX Labs PMM Protocol"`, `version="1.1"`.
+- **`PmmProtocol.sol`** — Main settlement contract. Inherits `EIP712` + `CallerAuth` + `ReentrancyGuard`. Handles caller-bound order filling, signature verification (EOA + ERC-1271), Permit2 transfers, WETH unwrapping, and time-slippage.
+- **`OrderRFQLib.sol`** — Defines the `OrderRFQ` struct (15 fields, including `allowedSender`) and its EIP-712 hash computation. The typehash and encoding logic must stay in sync with off-chain signing code.
+- **`PmmAdaptor.sol`** — DEX aggregator adapter. Supports legacy V1/V2/V3 and caller-bound V4 order formats. Implements `sellBase()`/`sellQuote()` interface.
+- **`EIP712.sol`** — Domain separator with immutable caching. Domain: `name="OKX Labs PMM Protocol"`, `version="1.2"`.
 
 ### Key Mechanisms
 
@@ -74,14 +74,14 @@ Project-level skills in `.claude/skills/`:
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for full V1/V2/V3 address list.
 
-**V3 (Current):**
+**V4 (Current):**
 
 | Chain | PmmProtocol | Adaptor |
 |-------|-------------|---------|
-| Ethereum | `0x5035D128ef482276Aa3bCce4307ffF8961ba30F9` | `0x10C40FEc71F6cd0F85613467eBa1857eCB1D1308` |
-| Arbitrum | `0xcdC09a6B5211bb51F18A1Af7691B6725bB024434` | `0xF2326e58A265f7020ED6D342A9Be4076B9fCF701` |
-| Base | `0x4EFBd630205DD9B987c3BcbEe257600abC1e3C11` | `0xa16f075B61d379708485F66e15075C4b638dC554` |
-| BNB Chain | `0xdD30339C4b2f7bac319Ef4Fa5c6963cc9F470B2d` | `0x85E569247f1c9b34E1d39Be41ae5194FB8f73156` |
-| XLayer | `0x5E18E052517Af66575105ACff6A7f17DED3f10F2` | `0x5670035CAf2Da294Af4BCdC48fB68E9E6157a02e` |
+| Ethereum | `0x73b920dC64ab6156f2D22b85AB9A9b06E597e154` | `0x4ecD468E1010E006f768EC034e5a6d8803183469` |
+| Arbitrum | `0x2C5486E06dB4F72E3eFd6bdd891Af50ee75b7e9e` | `0x34fDA863Bfef0F976F5d0a0e366BC44883296Cf7` |
+| Base | `0x9ECb5cf09eBb1Cb844b8e2C8cc7cB8b57643C6C8` | `0x22eef0C15678c482DcAC05c0d102363fc31f8C81` |
+| BNB Chain | `0x8A35eE6d2d533e6b2934ceD4aff0aDd0C7af1769` | `0x9a8d68089aDBe8428f79c244d34276a9f4251070` |
+| XLayer | `0x31d7BCA06a0143ABc7c93418792Aae8AA69183b0` | `0xa6566f0689a9ec2fdff3f6fd3ed58b227246765c` |
 
 Permit2 (all chains): `0x000000000022D473030F116dDEE9F6B43aC78BA3`

@@ -13,9 +13,9 @@ contract TestHelper is Test {
     uint256 public constant MAKER_PRIVATE_KEY = uint256(keccak256("maker-test-seed"));
     uint256 public constant TAKER_PRIVATE_KEY = uint256(keccak256("taker-test-seed"));
 
-    // OKX-backend signer used to authorise caller-bound settlement (SCDEX-1157 CallerAuth).
-    // Test-only key; Stage 3 may switch to `makeAddrAndKey("okxSigner")` per PRD §D AC-D-2.
-    uint256 public constant OKX_SIGNER_KEY = uint256(keccak256("okx-signer-test-seed"));
+    // Authorization signer used to authorise caller-bound settlement.
+    // Test-only key.
+    uint256 public constant AUTH_SIGNER_KEY = uint256(keccak256("auth-signer-test-seed"));
 
     bytes32 public constant TOKEN_PERMISSIONS_TYPEHASH = keccak256("TokenPermissions(address token,uint256 amount)");
 
@@ -26,7 +26,7 @@ contract TestHelper is Test {
     // Generate addresses from private keys
     address public immutable MAKER_ADDRESS;
     address public immutable TAKER_ADDRESS;
-    address public immutable OKX_SIGNER_ADDRESS;
+    address public immutable AUTH_SIGNER_ADDRESS;
 
     // Monotonic nonce source so each caller-auth signature uses a fresh nonce.
     uint256 internal _testAuthNonce;
@@ -34,7 +34,7 @@ contract TestHelper is Test {
     constructor() {
         MAKER_ADDRESS = vm.addr(MAKER_PRIVATE_KEY);
         TAKER_ADDRESS = vm.addr(TAKER_PRIVATE_KEY);
-        OKX_SIGNER_ADDRESS = vm.addr(OKX_SIGNER_KEY);
+        AUTH_SIGNER_ADDRESS = vm.addr(AUTH_SIGNER_KEY);
     }
 
     function createOrder(
@@ -69,25 +69,24 @@ contract TestHelper is Test {
         });
     }
 
-    /// @dev Builds a valid OKX caller-auth tuple for `caller` against `verifyingContract`,
-    /// signed by OKX_SIGNER_KEY (EIP-191 personal-sign, EIP-2098 compact 64-byte). Uses a
+    /// @dev Builds a valid caller-auth tuple for `caller` against `verifyingContract`,
+    /// signed by the test authorization key (EIP-191 personal-sign, EIP-2098 compact 64-byte). Uses a
     /// fresh monotonic nonce each call.
-    function _callerAuth(address caller, address verifyingContract)
+    function _callerAuth(address caller, address verifyingContract, bytes32 payloadHash)
         internal
-        returns (address[] memory allowedCallers, uint256 nonce, uint256 expiry, bytes memory okxSig)
+        returns (address[] memory allowedCallers, uint256 nonce, bytes memory authSig)
     {
         allowedCallers = new address[](1);
         allowedCallers[0] = caller;
         nonce = _testAuthNonce++;
-        expiry = block.timestamp + 1 hours;
 
         // Must match CallerAuth._verifyCallerAuth `inner` preimage exactly.
-        bytes32 inner = keccak256(abi.encode(verifyingContract, allowedCallers, nonce, expiry, block.chainid));
+        bytes32 inner = keccak256(abi.encode(verifyingContract, payloadHash, allowedCallers, nonce, block.chainid));
         bytes32 ethSignedHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", inner));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(OKX_SIGNER_KEY, ethSignedHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(AUTH_SIGNER_KEY, ethSignedHash);
         // EIP-2098 compact: pack the recovery bit (v-27) into the top bit of s.
         bytes32 vs = s | bytes32(uint256(v - 27) << 255);
-        okxSig = abi.encodePacked(r, vs);
+        authSig = abi.encodePacked(r, vs);
     }
 
     /// @dev Regression helper mirroring the removed `fillOrderRFQ`: fills to `caller` and
@@ -101,9 +100,9 @@ contract TestHelper is Test {
         bytes memory signature,
         uint256 flagsAndAmount
     ) internal returns (uint256, uint256, bytes32) {
-        (address[] memory allowedCallers, uint256 nonce, uint256 expiry, bytes memory okxSig) =
-            _callerAuth(caller, address(p));
-        return p.fillOrderRFQTo(order, signature, flagsAndAmount, caller, allowedCallers, nonce, expiry, okxSig);
+        (address[] memory allowedCallers, uint256 nonce, bytes memory authSig) =
+            _callerAuth(caller, address(p), keccak256(abi.encode(order)));
+        return p.fillOrderRFQTo(order, signature, flagsAndAmount, caller, allowedCallers, nonce, authSig);
     }
 
     function signOrder(OrderRFQLib.OrderRFQ memory order, bytes32 domainSeparator, uint256 privateKey)

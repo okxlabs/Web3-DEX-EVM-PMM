@@ -14,7 +14,7 @@ library OrderRFQLib {
         uint256 makerAmount; // 0xa0
         uint256 takerAmount; // 0xc0
         bool usePermit2; // 0xe0
-        address allowedSender; // 0x100 — anti-toxic-flow: required non-zero (SCDEX-1157 FR-5)
+        address allowedSender; // 0x100
         uint256 confidenceT; // 0x120
         uint256 confidenceWeight; // 0x140
         uint256 confidenceCap; // 0x160

@@ -9,7 +9,7 @@ description: "ERC-20, Permit2, and native ETH edge cases for OKX Labs PMM Protoc
 
 - [Pitfall] `IERC20.approve(spender, newAmount)` reverts on USDT when the current allowance is non-zero.
 - Trigger: Calling bare `approve` against a token that requires the zero-then-set pattern.
-- Correct approach: `PMMProtocol` uses the project's local `src/libraries/SafeERC20.sol` whose `forceApprove` retries `approve(spender, 0)` then `approve(spender, value)` on failure. `PMMAdapter`, however, uses OpenZeppelin's `safeApprove`, which does **not** auto-reset — if the adapter is reused across calls without explicit re-zeroing, USDT-style tokens may revert. <!-- TODO: Confirm whether the aggregator handles approval resets externally or whether PMMAdapter should be hardened to forceApprove -->
+- Correct approach: The local `SafeERC20` library provides `forceApprove`, but `PMMAdapter` uses OpenZeppelin `safeApprove`, which does **not** auto-reset a non-zero allowance. Standard successful fills consume the approval; integrations must still test non-standard token behavior.
 
 ## P-002: Fee-on-Transfer Tokens
 
@@ -41,16 +41,14 @@ description: "ERC-20, Permit2, and native ETH edge cases for OKX Labs PMM Protoc
 - Trigger: Full-fill of an order with `makerAmount > uint160.max` when `usePermit2 = true`. Reverts `RFQ_AmountTooLarge` (full-fill check) or `Permit2TransferAmountTooHigh` (allowance path) or — in the signature path — the Permit2 contract itself.
 - Correct approach: For maker amounts beyond 2^160-1, set `usePermit2 = false` so the protocol falls back to `safeTransferFrom`.
 
-## P-007: ERC-20 `permit` Spec Variance
+## P-007: Taker Permit Is Not a Fill Parameter
 
-- [Pitfall] `safePermit` auto-detects EIP-2612 (7-word payload, 32×7 bytes) vs Dai-style (8-word payload, 32×8 bytes) based on `permit.length`. Any other length reverts `SafePermitBadLength`.
-- Trigger: Taker passes a permit blob in a non-canonical encoding (extra padding, missing field, or chain-specific variant).
-- Correct approach: Use one of the two supported encodings exactly. `RevertReasonForwarder.reRevert()` will surface the underlying token's revert string when the call selector is correct but the permit signature is invalid.
+- [Pitfall] The current `fillOrderRFQTo` interface does not accept an ERC-20 permit blob.
+- Trigger: An integration encodes a removed permit-and-fill selector or appends permit data to the current call.
+- Correct approach: Execute any taker-side permit separately before the adapter-driven fill.
 
 ## P-008: Adapter Refund Window
 
-- [Pitfall] `PMMAdapter._handleRefund` only refunds when `(payerOrigin & ORIGIN_PAYER) == ORIGIN_PAYER`. Without the sentinel, any leftover `takerAsset` stays in the adapter and is consumed by the **next** caller (since `balanceOf` is used as the spend cap).
+- [Pitfall] `PMMAdapter._handleRefund` only refunds when `(payerOrigin & MARKER_MASK) == ORIGIN_PAYER`. Without the exact sentinel, any leftover `takerAsset` stays in the adapter and can be consumed by the **next** caller (since `balanceOf` is used as the spend cap). `DEX_ROUTER_CALLER_MARKER` and other marker aliases are rejected.
 - Trigger: Aggregator forgets to append the payer-origin word, or appends a malformed word.
-- Correct approach: Always append a trailing 32-byte word whose high bits match `ORIGIN_PAYER` (`0x3ca20afc2ccc…000`) and whose low 160 bits are the payer address; pre-flight any aggregator integration with a leftover-balance test.
-
-<!-- TODO: Add cases specific to chain-dependent token quirks (e.g., USDC bridged variants, rebasing tokens on a particular L2) -->
+- Correct approach: Always append a trailing 32-byte word whose high six bytes exactly match `ORIGIN_PAYER` under `MARKER_MASK` and whose low 160 bits are the payer address; pre-flight any aggregator integration with a leftover-balance test.

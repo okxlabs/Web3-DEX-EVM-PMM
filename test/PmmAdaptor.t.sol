@@ -13,7 +13,7 @@ import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 /// @dev Exposes the internal `_call` overloads so the maker-balance recheck logic
 /// is observable at assertion level without driving the full sellBase/sellQuote path.
 contract PMMAdapterHarness is PMMAdapter {
-    constructor(address okxSigner) PMMAdapter(okxSigner) {}
+    constructor(address authSigner) PMMAdapter(authSigner) {}
 
     /// 4-arg path (V2/V3) — caller controls the MakerBalanceCheck directly.
     function exposedCall4(
@@ -125,9 +125,9 @@ contract PmmAdaptorTest is Test {
     address internal maker = makeAddr("maker");
     address internal taker = makeAddr("taker");
 
-    // OKX signer for adapter construction. These tests exercise only the V1/V2/V3 legacy
+    // Authorization signer for adapter construction. These tests exercise only the V1/V2/V3 legacy
     // `_call` paths (no orderType=4 caller-auth), so any non-zero value suffices.
-    address internal constant OKX_SIGNER = address(0xBEEF);
+    address internal constant AUTH_SIGNER = address(0xBEEF);
 
     uint256 internal constant RFQ_ID = 7;
     uint256 internal constant MAKER_AMOUNT = 100 ether;
@@ -142,8 +142,8 @@ contract PmmAdaptorTest is Test {
     bytes4 internal constant SEL_UNKNOWN = 0xdeadbeef; // not mapped → fallback branch
 
     function setUp() public {
-        harness = new PMMAdapterHarness(OKX_SIGNER);
-        adapter = new PMMAdapter(OKX_SIGNER);
+        harness = new PMMAdapterHarness(AUTH_SIGNER);
+        adapter = new PMMAdapter(AUTH_SIGNER);
         pool = new MockRevertingPool();
         makerToken = new MockBalanceToken();
         takerToken = new MockERC20("TakerToken", "TAKER", 18);
@@ -170,12 +170,12 @@ contract PmmAdaptorTest is Test {
     }
 
     /*//////////////////////////////////////////////////////////////
-            FR-1  Permit2 full-fill maker-balance attribution
+            Permit2 full-fill maker-balance attribution
     //////////////////////////////////////////////////////////////*/
 
-    // FR-1-AC-1: Permit2 full-fill, balance < makerAmount, underlying revert falls to
-    // the fallback branch → attribute to RFQ_SafeTransferFromFailed.
-    function testFR1_AC1_Permit2FullFillInsufficientBalanceAttributesSafeTransferFromFailed() public {
+    // Permit2 full-fill with balance < makerAmount falls through the fallback branch and is
+    // attributed to RFQ_SafeTransferFromFailed.
+    function testPermit2FullFillInsufficientBalanceAttributesSafeTransferFromFailed() public {
         makerToken.setBalance(maker, MAKER_AMOUNT - 1); // strictly below
         pool.setRevertData(abi.encodePacked(SEL_UNKNOWN));
 
@@ -185,9 +185,9 @@ contract PmmAdaptorTest is Test {
         );
     }
 
-    // FR-1-AC-2: Permit2 full-fill, balance >= makerAmount → must NOT be reattributed;
+    // Permit2 full-fill with balance >= makerAmount must not be reattributed;
     // stays RFQ_Failed. Includes the strict-boundary case balance == makerAmount.
-    function testFR1_AC2_BalanceEqualToMakerAmountStaysRfqFailed() public {
+    function testBalanceEqualToMakerAmountStaysRfqFailed() public {
         makerToken.setBalance(maker, MAKER_AMOUNT); // balance == makerAmount (strict < is false)
         pool.setRevertData(abi.encodePacked(SEL_UNKNOWN));
 
@@ -197,7 +197,7 @@ contract PmmAdaptorTest is Test {
         );
     }
 
-    function testFR1_AC2_BalanceAboveMakerAmountStaysRfqFailed() public {
+    function testBalanceAboveMakerAmountStaysRfqFailed() public {
         makerToken.setBalance(maker, MAKER_AMOUNT + 1 ether);
         pool.setRevertData(abi.encodePacked(SEL_UNKNOWN));
 
@@ -207,10 +207,10 @@ contract PmmAdaptorTest is Test {
         );
     }
 
-    // FR-1-AC-3: attribution must not depend on the revert encoding. The same
+    // Attribution must not depend on the revert encoding. The same
     // insufficient-balance outcome is reached whether the underlying revert is the
     // Error(string) "ERC20: transfer amount exceeds balance" or an unknown selector.
-    function testFR1_AC3_StringRevertInsufficientBalanceAttributesSafeTransferFromFailed() public {
+    function testStringRevertInsufficientBalanceAttributesSafeTransferFromFailed() public {
         makerToken.setBalance(maker, MAKER_AMOUNT - 1);
         pool.setRevertData(_stringError("ERC20: transfer amount exceeds balance"));
 
@@ -220,7 +220,7 @@ contract PmmAdaptorTest is Test {
         );
     }
 
-    function testFR1_AC3_UnknownSelectorInsufficientBalanceAttributesSafeTransferFromFailed() public {
+    function testUnknownSelectorInsufficientBalanceAttributesSafeTransferFromFailed() public {
         makerToken.setBalance(maker, MAKER_AMOUNT - 1);
         pool.setRevertData(abi.encodePacked(bytes4(0x12345678))); // arbitrary unknown selector
 
@@ -231,10 +231,10 @@ contract PmmAdaptorTest is Test {
     }
 
     /*//////////////////////////////////////////////////////////////
-            FR-2  V3 confidence (time-slippage) adjusted threshold
+            V3 confidence (time-slippage) adjusted threshold
     //////////////////////////////////////////////////////////////*/
-    // Scenario shared by FR-2 cases: confidenceT in the past, weight*timeDiff hits the
-    // 5% cap (50000 ppm) → adjusted makerAmount = 100e18 * (1 - 0.05) = 95e18.
+    // Shared scenario: confidenceT in the past, weight*timeDiff hits the 5% cap
+    // (50000 ppm), so adjusted makerAmount = 100e18 * (1 - 0.05) = 95e18.
 
     uint256 internal constant CONF_TIME_DIFF = 10;
     uint256 internal constant CONF_WEIGHT = 5000; // 10 * 5000 = 50000 == cap
@@ -247,9 +247,9 @@ contract PmmAdaptorTest is Test {
         confidenceT = NOW_TS - CONF_TIME_DIFF;
     }
 
-    // FR-2-AC-1: V3, block.timestamp > confidenceT, balance < adjusted makerAmount
-    // → RFQ_SafeTransferFromFailed.
-    function testFR2_AC1_V3BalanceBelowAdjustedAttributesSafeTransferFromFailed() public {
+    // V3 with block.timestamp > confidenceT and balance < adjusted makerAmount attributes to
+    // RFQ_SafeTransferFromFailed.
+    function testV3BalanceBelowAdjustedAttributesSafeTransferFromFailed() public {
         uint256 confidenceT = _warpAndConfidenceT();
         makerToken.setBalance(maker, ADJUSTED_MAKER_AMOUNT - 1 ether); // 94e18 < 95e18
         pool.setRevertData(abi.encodePacked(SEL_UNKNOWN));
@@ -269,10 +269,10 @@ contract PmmAdaptorTest is Test {
         );
     }
 
-    // FR-2-AC-3: V3, adjusted <= balance < full makerAmount → RFQ_Failed (the protocol
+    // V3 with adjusted <= balance < full makerAmount stays RFQ_Failed (the protocol
     // would actually only transfer the adjusted amount, which the maker can cover, so the
     // failure is unrelated to balance and must not be misreported).
-    function testFR2_AC3_V3BalanceAtOrAboveAdjustedStaysRfqFailed() public {
+    function testV3BalanceAtOrAboveAdjustedStaysRfqFailed() public {
         uint256 confidenceT = _warpAndConfidenceT();
         makerToken.setBalance(maker, ADJUSTED_MAKER_AMOUNT + 1 ether); // 96e18 (>=95, <100)
         pool.setRevertData(abi.encodePacked(SEL_UNKNOWN));
@@ -292,8 +292,8 @@ contract PmmAdaptorTest is Test {
         );
     }
 
-    // FR-2-AC-3 boundary: balance exactly == adjusted threshold → strict `<` is false → RFQ_Failed.
-    function testFR2_AC3_V3BalanceExactlyAdjustedStaysRfqFailed() public {
+    // Boundary: balance exactly == adjusted threshold makes strict `<` false and stays RFQ_Failed.
+    function testV3BalanceExactlyAdjustedStaysRfqFailed() public {
         uint256 confidenceT = _warpAndConfidenceT();
         makerToken.setBalance(maker, ADJUSTED_MAKER_AMOUNT); // 95e18 == adjusted
         pool.setRevertData(abi.encodePacked(SEL_UNKNOWN));
@@ -313,10 +313,10 @@ contract PmmAdaptorTest is Test {
         );
     }
 
-    // FR-2-AC-4: V2 has no confidence fields (passed as 0) → threshold is the full
-    // order makerAmount. A balance that would be "covered" under V3 slippage (96e18 >= 95e18)
-    // is still insufficient for V2 (96e18 < 100e18) → RFQ_SafeTransferFromFailed.
-    function testFR2_AC4_V2ThresholdIsFullMakerAmount() public {
+    // V2 has no confidence fields (passed as 0), so threshold is the full order makerAmount.
+    // A balance covered under V3 slippage (96e18 >= 95e18) is still insufficient for V2
+    // (96e18 < 100e18), so attribution is RFQ_SafeTransferFromFailed.
+    function testV2ThresholdIsFullMakerAmount() public {
         makerToken.setBalance(maker, ADJUSTED_MAKER_AMOUNT + 1 ether); // 96e18 < 100e18
         pool.setRevertData(abi.encodePacked(SEL_UNKNOWN));
 
@@ -335,9 +335,9 @@ contract PmmAdaptorTest is Test {
         );
     }
 
-    // FR-2 (no slippage before confidenceT): block.timestamp <= confidenceT → no reduction,
+    // No slippage before confidenceT: block.timestamp <= confidenceT -> no reduction,
     // threshold stays full makerAmount.
-    function testFR2_NoSlippageBeforeConfidenceTUsesFullMakerAmount() public {
+    function testNoSlippageBeforeConfidenceTUsesFullMakerAmount() public {
         vm.warp(NOW_TS);
         uint256 confidenceT = NOW_TS + 1 hours; // still in the future
         makerToken.setBalance(maker, MAKER_AMOUNT - 1 ether); // 99e18 < 100e18
@@ -358,9 +358,9 @@ contract PmmAdaptorTest is Test {
         );
     }
 
-    // FR-2 (cap guard): confidenceCap > _CONFIDENCE_CAP_LIMIT (50000) → helper leaves
+    // Cap guard: confidenceCap > _CONFIDENCE_CAP_LIMIT (50000) -> helper leaves
     // makerAmount unchanged (mirrors PmmProtocol rejecting it), so threshold = full amount.
-    function testFR2_ConfidenceCapAboveLimitFallsBackToFullMakerAmount() public {
+    function testConfidenceCapAboveLimitFallsBackToFullMakerAmount() public {
         uint256 confidenceT = _warpAndConfidenceT();
         makerToken.setBalance(maker, MAKER_AMOUNT - 1 ether); // 99e18 < 100e18
         pool.setRevertData(abi.encodePacked(SEL_UNKNOWN));
@@ -381,12 +381,12 @@ contract PmmAdaptorTest is Test {
     }
 
     /*//////////////////////////////////////////////////////////////
-            FR-3  Backward compatibility & safe degrade
+            Backward compatibility & safe degrade
     //////////////////////////////////////////////////////////////*/
 
-    // FR-3-AC-2: legacy 3-arg path (V1 / non-Permit2) never enables the
-    // recheck → even with zero maker balance the result is the unchanged RFQ_Failed.
-    function testFR3_AC2_LegacyCallNeverReattributes() public {
+    // Legacy 3-arg path (V1 / non-Permit2 / partial-fill) never enables the recheck; even with
+    // zero maker balance the result is the unchanged RFQ_Failed.
+    function testLegacyCallNeverReattributes() public {
         makerToken.setBalance(maker, 0);
         pool.setRevertData(abi.encodePacked(SEL_UNKNOWN));
 
@@ -394,8 +394,8 @@ contract PmmAdaptorTest is Test {
         harness.exposedCall3(address(pool), DUMMY_DATA, RFQ_ID);
     }
 
-    // FR-3-AC-2: 4-arg path with enabled=false behaves identically to legacy.
-    function testFR3_AC2_DisabledCheckNeverReattributes() public {
+    // 4-arg path with enabled=false behaves identically to legacy.
+    function testDisabledCheckNeverReattributes() public {
         makerToken.setBalance(maker, 0);
         pool.setRevertData(abi.encodePacked(SEL_UNKNOWN));
 
@@ -405,9 +405,9 @@ contract PmmAdaptorTest is Test {
         );
     }
 
-    // FR-3-AC: staticcall(balanceOf) reverts → _safeBalanceOf returns ok=false → safe
+    // staticcall(balanceOf) reverts -> _safeBalanceOf returns ok=false -> safe
     // degrade to RFQ_Failed (no attribution, no propagation of the balanceOf revert).
-    function testFR3_AC_BalanceOfRevertSafeDegradesToRfqFailed() public {
+    function testBalanceOfRevertSafeDegradesToRfqFailed() public {
         makerToken.setRevertMode();
         pool.setRevertData(abi.encodePacked(SEL_UNKNOWN));
 
@@ -417,8 +417,8 @@ contract PmmAdaptorTest is Test {
         );
     }
 
-    // FR-3-AC: balanceOf returns < 32 bytes → ok=false → safe degrade to RFQ_Failed.
-    function testFR3_AC_BalanceOfShortReturnSafeDegradesToRfqFailed() public {
+    // balanceOf returns < 32 bytes -> ok=false -> safe degrade to RFQ_Failed.
+    function testBalanceOfShortReturnSafeDegradesToRfqFailed() public {
         makerToken.setShortReturnMode();
         pool.setRevertData(abi.encodePacked(SEL_UNKNOWN));
 
@@ -429,7 +429,7 @@ contract PmmAdaptorTest is Test {
     }
 
     /*//////////////////////////////////////////////////////////////
-       FR-3  Existing error-code semantics MUST stay unchanged
+       Existing error-code semantics MUST stay unchanged
     //////////////////////////////////////////////////////////////*/
 
     // Even with the recheck enabled and an insufficient balance, a *known* revert
@@ -479,7 +479,7 @@ contract PmmAdaptorTest is Test {
     }
 
     /*//////////////////////////////////////////////////////////////
-       FR-3-AC-2 (end-to-end): enable-flag construction in _executeV*Order
+       End-to-end enable-flag construction in _executeV*Order
     //////////////////////////////////////////////////////////////*/
 
     function _buildV3Order(bool usePermit2, bool withPermit2Sig)

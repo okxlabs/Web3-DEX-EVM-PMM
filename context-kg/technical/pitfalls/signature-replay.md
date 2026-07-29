@@ -27,7 +27,7 @@ description: "EIP-712 signature replay vectors and required mitigations for Orde
 
 - [Pitfall] Orders with `block.timestamp > order.expiry` MUST be rejected.
 - Trigger: Missing or out-of-order expiry check.
-- Correct approach: `_fillOrderRFQTo:216` reverts `RFQ_OrderExpired(rfqId)` before the invalidator update and before any transfer.
+- Correct approach: `_fillOrderRFQTo` (`PmmProtocol.sol:166-168`) reverts `RFQ_OrderExpired(rfqId)` before the invalidator update and before any transfer.
 
 ## P-005: ECDSA Signature Malleability (64 vs 65 bytes)
 
@@ -39,13 +39,13 @@ description: "EIP-712 signature replay vectors and required mitigations for Orde
 
 - [Pitfall] The Permit2 signature is hashed (`keccak256(order.permit2Signature)`) into the OrderRFQ struct hash. Signing the OrderRFQ first and then computing a fresh Permit2 signature breaks the binding.
 - Trigger: Off-chain signer pipeline that emits the OrderRFQ digest before the Permit2 digest is finalised, then back-fills `permit2Signature` afterwards.
-- Correct approach: Always sign the Permit2 payload first, embed the resulting 65-byte signature into `order.permit2Signature`, then compute the OrderRFQ digest and sign it. See `arch/eip712-signature-design.md` §3.
+- Correct approach: Always sign the Permit2 payload first, embed the resulting 65-byte signature into `order.permit2Signature`, then compute the OrderRFQ digest and sign it. See `arch/eip712-signature-design.md` Section 3.
 
 ## P-007: Domain `NAME` / `VERSION` Drift
 
 - [Pitfall] If `_NAME` or `_VERSION` is changed in the contract without updating off-chain signers, every new maker signature fails on-chain with `RFQ_BadSignature`.
-- Trigger: Solo contract change without a coordinated backend release.
-- Correct approach: Treat any change to `_NAME` / `_VERSION` as a breaking redeploy. Flag in the PR body and coordinate with backend per `knowledge-base.md` §5.
+- Trigger: A contract domain change without coordinated signer updates.
+- Correct approach: Treat any change to `_NAME` / `_VERSION` as a breaking redeploy and update all signing integrations before deployment.
 
 ## P-008: ERC-1271 Hint Bit Misuse
 

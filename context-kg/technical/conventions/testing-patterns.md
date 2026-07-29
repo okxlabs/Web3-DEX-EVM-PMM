@@ -1,10 +1,10 @@
 ---
 name: "testing-patterns"
-description: "Foundry testing conventions for OKX Labs PMM Protocol — incl. caller-auth (okxSigner) and anti-toxic-flow (allowedSender/dexRouterCaller) test patterns"
+description: "Foundry testing conventions for OKX Labs PMM Protocol — incl. caller-auth (authSigner) and anti-toxic-flow (allowedSender/dexRouterCaller) test patterns"
 type: "design"
 title: "Testing Patterns"
-tags: ["testing", "foundry", "forge", "caller-auth", "okxSigner", "allowedSender", "anti-toxic-flow", "SCDEX-1157"]
-sources: ["test/helpers/TestHelper.sol", "test/PmmProtocol.t.sol", "test/PmmProtocolTimeSlippage.t.sol", "test/PmmAdaptor.t.sol", "test/mocks/MockMarketMaker.sol"]
+tags: ["testing", "foundry", "forge", "caller-auth", "authSigner", "allowedSender", "anti-toxic-flow"]
+sources: ["test/helpers/TestHelper.sol", "test/CallerAuth.t.sol", "test/PmmProtocol.t.sol", "test/PmmProtocolAntiToxic.t.sol", "test/PmmProtocolTimeSlippage.t.sol", "test/PmmAdaptor.t.sol", "test/mocks/MockMarketMaker.sol"]
 last_updated: "2026-07-05"
 ---
 
@@ -36,17 +36,17 @@ Suite layout:
 - [Rule] Tests MUST cover at minimum: valid fill, expired signature, wrong signer (`RFQ_BadSignature`), and replay attempt (`RFQ_InvalidatedOrder`). The current `PmmProtocol.t.sol` already covers these — preserve when refactoring.
 - [Rule] When testing ERC-1271 paths, the test contract must implement `isValidSignature(bytes32, bytes) returns (bytes4)` returning `0x1626ba7e` for an accepted digest.
 
-### Caller-Auth (OKX signer) Testing — SCDEX-1157
+### Caller-Auth Signer Testing
 
 `test/helpers/TestHelper.sol` provides the caller-auth scaffolding used by the single caller-bound `fillOrderRFQTo`:
 
-- `OKX_SIGNER_KEY` (a deterministic test key) and `OKX_SIGNER_ADDRESS = vm.addr(OKX_SIGNER_KEY)`. Deploy `PMMProtocol`/`PMMAdapter` with this signer.
-- `_callerAuth(caller, verifyingContract)` — builds and signs the `(address(this), allowedCallers, nonce, expiry, chainId)` tuple with `OKX_SIGNER_KEY` via `vm.sign`, EIP-191 personal-sign, EIP-2098 compact 64-byte.
+- `AUTH_SIGNER_KEY` (a deterministic test key) and `AUTH_SIGNER_ADDRESS = vm.addr(AUTH_SIGNER_KEY)`. Deploy `PMMProtocol`/`PMMAdapter` with this signer.
+- `_callerAuth(caller, verifyingContract, payloadHash)` — builds and signs the `(verifyingContract, payloadHash, allowedCallers, nonce, chainId)` tuple with `AUTH_SIGNER_KEY` via `vm.sign`, EIP-191 personal-sign, EIP-2098 compact 64-byte. PMM tests pass `keccak256(abi.encode(order))`.
 - `_fillAs(protocol, caller, …)` — regression wrapper that supplies a valid caller-auth tuple so tests exercising the old `fillOrderRFQ(...)` shape keep passing against the new signature.
-- [Rule] Caller-auth signatures MUST also use `vm.sign(OKX_SIGNER_KEY, …)`; never hardcode `okxSig`. AC-D-2 recommends `makeAddrAndKey("okxSigner")` — Stage 3 may switch `OKX_SIGNER_KEY` to that form.
-- [Rule] Caller-auth revert coverage MUST assert the specific `OSA_*` selector: `OSA_UntrustedCaller`, `OSA_Expired`, `OSA_BadOkxSig`, `OSA_BadSigLen`, `OSA_NonceUsed`, and the constructor `OSA_ZeroSigner` (deploy with `address(0)` signer).
+- [Rule] Caller-auth signatures MUST also use `vm.sign(AUTH_SIGNER_KEY, …)`; never hardcode `authSig`. Tests may instead derive an equivalent key with `makeAddrAndKey("authSigner")`.
+- [Rule] Caller-auth revert coverage MUST assert the specific `AUTH_*` selector: `AUTH_UntrustedCaller`, `AUTH_BadAuthSig`, `AUTH_BadSigLen`, `AUTH_NonceUsed`, and the constructor `AUTH_ZeroSigner` (deploy with `address(0)` signer). Include a payload-tamper case where a signature for one `payloadHash` fails against another without consuming the nonce.
 
-### Anti-Toxic-Flow (allowedSender / dexRouterCaller) Testing — SCDEX-1157
+### Anti-Toxic-Flow (allowedSender / dexRouterCaller) Testing
 
 - [Rule] The `-64` `dexRouterCaller` word must be injected in tests via a mock (DexRouter injection is out-of-scope for this repo). Cover: happy path (`allowedSender == dexRouterCaller` → fill), mismatch (`!=` → `RFQ_BadSender`), zero `allowedSender` (fail-closed → `RFQ_BadSender`), and marker exact-match (forged/missing marker → `dexRouterCaller == 0` → `RFQ_BadSender`).
 - [Rule] `createOrder(...)` in `TestHelper.sol` now populates `allowedSender` (defaults to `address(0)`); set it explicitly for anti-toxic happy-path tests.
@@ -73,11 +73,10 @@ Suite layout:
 - [Rule] Each branch of the fill flow's amount-derivation logic (full fill, maker-side partial, taker-side partial) MUST have a dedicated test asserting both `filledMakerAmount` and `filledTakerAmount`.
 - [Rule] Time-slippage tests cover at minimum: before `confidenceT` (no reduction), after `confidenceT` mid-window, after `confidenceT` past the cap, and `confidenceCap > _CONFIDENCE_CAP_LIMIT` revert. These already exist in `PmmProtocolTimeSlippage.t.sol`.
 
-## Struct-Sync Status (SCDEX-1157)
+## Struct-Sync Status
 
-> **Updated 2026-07-05:** the OrderRFQ struct is now **15 fields** (`allowedSender` added between `usePermit2` and `confidenceT`). The test helpers/mocks were updated to the 15-field shape: `test/helpers/TestHelper.sol::createOrder` and `test/mocks/MockMarketMaker.sol` both carry `allowedSender`, and `test/*.t.sol` deploy the protocol/adapter with an `okxSigner` and route fills through `_fillAs` / `_callerAuth`. `forge build` compiles `src/`, `test/`, and `scripts/` clean. The non-fork suite passes as a coherence check; full anti-toxic + caller-auth coverage (FR-5 / FR-3, PRD §D AC-D-3) is Stage 3's remit and may add a dedicated `test/PmmProtocol*AntiToxic*.t.sol`.
+> **Updated 2026-07-05:** the OrderRFQ struct is now **15 fields** (`allowedSender` added between `usePermit2` and `confidenceT`). The test helpers/mocks were updated to the 15-field shape: `test/helpers/TestHelper.sol::createOrder` and `test/mocks/MockMarketMaker.sol` both carry `allowedSender`, and `test/*.t.sol` deploy the protocol/adapter with an `authSigner` and route fills through `_fillAs` / `_callerAuth`. `forge build` compiles `src/`, `test/`, and `scripts/` clean.
 
-<!-- TODO: add fuzz-test conventions if testFuzz_ functions are introduced -->
 
 ## Not Currently Used
 
