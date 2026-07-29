@@ -16,8 +16,6 @@ import "../src/interfaces/IWETH.sol";
  *     --verify
  */
 
-//  forge verify-contract 0xa016a3c082e780c096cfa7e70018c7257c071f64 src/PmmProtocol.sol:PMMProtocol --chain-id 56 --etherscan-api-key 18KMMG7MBYD4P4HJ6ICMZS7NJ95UTGRB7H
-
 contract Deploy is Script {
     // Canonical WETH addresses per chain
     address constant WETH_MAINNET = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
@@ -34,18 +32,18 @@ contract Deploy is Script {
         console.log("Chain ID:", block.chainid);
         console.log("Wrapped native used:", weth);
 
-        // OKX backend signer used for the anti-toxic-flow caller binding (SCDEX-1157).
-        // Provided at deploy time via the OKX_SIGNER env var.
-        address okxSigner = vm.envAddress("OKX_SIGNER");
-        require(okxSigner != address(0), "Deploy: OKX_SIGNER unset");
+        // Authorization signer used for caller binding.
+        // Provided at deploy time via the AUTH_SIGNER env var.
+        address authSigner = vm.envAddress("AUTH_SIGNER");
+        require(authSigner != address(0), "Deploy: AUTH_SIGNER unset");
 
         vm.startBroadcast(deployer);
 
-        PMMProtocol protocol = new PMMProtocol(IWETH(weth), okxSigner);
+        PMMProtocol protocol = new PMMProtocol(IWETH(weth), authSigner);
 
-        // Append the constructor arg (okxSigner) to the adapter creation bytecode.
+        // Append the constructor arg (authSigner) to the adapter creation bytecode.
         bytes memory adapterBytecode =
-            abi.encodePacked(vm.getCode("PmmAdaptor.sol:PMMAdapter"), abi.encode(okxSigner));
+            abi.encodePacked(vm.getCode("PmmAdaptor.sol:PMMAdapter"), abi.encode(authSigner));
         address adapter;
         assembly {
             adapter := create(0, add(adapterBytecode, 0x20), mload(adapterBytecode))

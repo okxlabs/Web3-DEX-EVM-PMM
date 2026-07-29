@@ -56,4 +56,4 @@ description: "Solidity coding conventions for OKX Labs PMM Protocol"
 - `erc20-unchecked-transfer` on `_WETH.transfer(maker, takerAmount)` — `_WETH` is a known WETH9 contract whose `transfer` returns `true` on success.
 - `unsafe-typecast` on `uint160(uint256(payerOrigin) & ADDRESS_MASK)` in `PMMAdapter._handleRefund` — the mask is the explicit truncation guarantee.
 
-If a new warning of one of these classes appears in unrelated code, treat it as a bug and resolve it; do not silence existing ones without team review.
+If a new warning of one of these classes appears, treat it as a bug and resolve it; do not silence existing warnings without a documented reason.

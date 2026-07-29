@@ -39,7 +39,7 @@ contract PmmProtocolTest is TestHelper {
         makerToken = new MockERC20("MakerToken", "MAKER", 18);
         takerToken = new MockERC20("TakerToken", "TAKER", 18);
         weth = new MockWETH();
-        pmmProtocol = new PMMProtocol(IWETH(address(weth)), OKX_SIGNER_ADDRESS);
+        pmmProtocol = new PMMProtocol(IWETH(address(weth)), AUTH_SIGNER_ADDRESS);
 
         maker = MAKER_ADDRESS;
         taker = TAKER_ADDRESS;
@@ -193,6 +193,51 @@ contract PmmProtocolTest is TestHelper {
 
         assertEq(makerFilled, desiredMaker);
         assertEq(makerToken.balanceOf(taker), desiredMaker);
+    }
+
+    function testFillOrderRejectsRfqIdAboveUint64() public {
+        OrderRFQLib.OrderRFQ memory order = createOrder(
+            uint256(type(uint64).max) + 1, // low 64 bits collide with rfqId 0
+            getFutureTimestamp(1 hours),
+            address(makerToken),
+            address(takerToken),
+            maker,
+            MAKER_AMOUNT,
+            TAKING_AMOUNT,
+            false,
+            0,
+            0,
+            0
+        );
+        bytes memory signature = _sign(order);
+
+        vm.prank(taker);
+        vm.expectRevert(abi.encodeWithSelector(Errors.RFQ_InvalidRfqId.selector, order.rfqId));
+        _fillAs(pmmProtocol, taker, order, signature, 0);
+    }
+
+    function testFillOrderRejectsMultiCallerAuth() public {
+        OrderRFQLib.OrderRFQ memory order = _defaultOrder(false);
+        bytes memory signature = _sign(order);
+
+        address[] memory callers = new address[](2);
+        callers[0] = taker;
+        callers[1] = makeAddr("secondCaller");
+        uint256 nonce = 999_999;
+        bytes32 inner = keccak256(
+            abi.encode(address(pmmProtocol), keccak256(abi.encode(order)), callers, nonce, block.chainid)
+        );
+        bytes32 ethSignedHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", inner));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(AUTH_SIGNER_KEY, ethSignedHash);
+        bytes memory authSig = abi.encodePacked(r, s | bytes32(uint256(v - 27) << 255));
+
+        vm.prank(taker);
+        vm.expectRevert(CallerAuth.AUTH_BadCallersLength.selector);
+        pmmProtocol.fillOrderRFQTo(order, signature, 0, taker, callers, nonce, authSig);
+
+        vm.prank(taker);
+        vm.expectRevert(CallerAuth.AUTH_BadCallersLength.selector);
+        pmmProtocol.fillOrderRFQTo(order, signature, 0, taker, new address[](0), nonce, authSig);
     }
 
     function testCancelOrderPreventsFill() public {

@@ -4,96 +4,72 @@ pragma solidity ^0.8.0;
 import "./ECDSA.sol";
 import "./Constants.sol";
 
-/// @title CallerAuth — stateless OKX-signed caller-binding base for anti-arbitrage adapters.
-///
-/// @notice Authorization base that binds a swap to (a) an OKX-signed authorization and (b) the set
-///         of on-chain callers allowed to relay it. It exists to close the "address-decoupling"
-///         arbitrage: a market maker quotes for a clean address but the swap is settled from a
-///         different address that bypasses allowedSender / fee controls.
-///
-/// @dev Design contract (see A-02 design note §A0):
-///        - No owner, no setter, no registry. The signer is fixed at deploy time (immutable).
-///        - Append-only per-instance nonce bitmap (Permit2-style wordPos -> bitmap). CEI: the nonce
-///          is consumed inside `_verify*` BEFORE the caller performs any external swap/transfer, so a
-///          reentrant replay of the same nonce reverts.
-///        - Signatures are EIP-2098 64-byte compact only, verified via the repo's ECDSA library
-///          (upper-half `s` rejected, recover==0 fails closed). Digest is EIP-191 prefixed.
-///        - The digest binds `address(this)` and `block.chainid`, giving cross-contract and
-///          cross-chain replay protection.
-///      Meant to be inherited by NON-proxy adapters (DynamicRoute / NativePmmAdapterV4). It carries
-///      only append-only nonce storage and immutable config, so it introduces no value/routing state.
+/// @dev Shared authorization helper for payload-scoped caller checks.
 abstract contract CallerAuth {
-    /// @notice OKX authorization signer. Set once at construction, never mutable.
-    address public immutable OKX_SIGNER;
+    /// @dev Authorization signer fixed at deployment.
+    address public immutable AUTH_SIGNER;
 
-    /// @dev Per-instance single-use nonce bitmap: wordPos (nonce >> 8) -> 256-bit word.
+    /// @dev wordPos => nonce bitmap, where wordPos = nonce >> 8.
     mapping(uint256 => uint256) private _callerAuthNonceBitmap;
 
     // =========================== Errors ===========================
 
-    error OSA_ZeroSigner();
-    error OSA_Expired();
-    error OSA_UntrustedCaller();
-    error OSA_BadOkxSig();
-    error OSA_BadSigLen();
-    error OSA_NonceUsed();
+    error AUTH_ZeroSigner();
+    error AUTH_UntrustedCaller();
+    error AUTH_BadCallersLength();
+    error AUTH_BadAuthSig();
+    error AUTH_BadSigLen();
+    error AUTH_NonceUsed();
 
-    /// @param okxSigner Authorization signer address; zero address is rejected (fail-closed deploy).
-    constructor(address okxSigner) {
-        if (okxSigner == address(0)) revert OSA_ZeroSigner();
-        OKX_SIGNER = okxSigner;
+    constructor(address authSigner) {
+        if (authSigner == address(0)) revert AUTH_ZeroSigner();
+        AUTH_SIGNER = authSigner;
     }
 
     // =========================== Verification ===========================
 
-    /// @notice Verify a plain caller-binding authorization.
-    /// @dev inner = keccak256(abi.encode(address(this), allowedCallers, nonce, expiry, block.chainid)).
+    /// @dev Verifies `keccak256(abi.encode(address(this), payloadHash, allowedCallers, nonce, block.chainid))`.
     function _verifyCallerAuth(
+        bytes32 payloadHash,
         address[] memory allowedCallers,
         uint256 nonce,
-        uint256 expiry,
-        bytes memory okxSig
+        bytes memory authSig
     ) internal {
         bytes32 inner = keccak256(
-            abi.encode(address(this), allowedCallers, nonce, expiry, block.chainid)
+            abi.encode(address(this), payloadHash, allowedCallers, nonce, block.chainid)
         );
-        _verifyAuthCommon(inner, allowedCallers, nonce, expiry, okxSig);
+        _verifyAuthCommon(inner, allowedCallers, nonce, authSig);
     }
 
-    /// @dev Shared verification core. Order mirrors the design note: sig length -> signer -> expiry
-    ///      -> caller membership -> nonce consumption (nonce consumed last but still before any
-    ///      external call the caller makes after `_verify*` returns, preserving CEI).
+    /// @dev Accepts only 64-byte EIP-2098 compact signatures.
     function _verifyAuthCommon(
         bytes32 inner,
         address[] memory allowedCallers,
         uint256 nonce,
-        uint256 expiry,
-        bytes memory okxSig
+        bytes memory authSig
     ) internal {
-        if (okxSig.length != 64) revert OSA_BadSigLen();
+        if (authSig.length != 64) revert AUTH_BadSigLen();
 
         bytes32 r;
         bytes32 vs;
         /// @solidity memory-safe-assembly
         assembly {
-            r := mload(add(okxSig, 0x20))
-            vs := mload(add(okxSig, 0x40))
+            r := mload(add(authSig, 0x20))
+            vs := mload(add(authSig, 0x40))
         }
 
         bytes32 digest = ECDSA.toEthSignedMessageHash(inner);
         address signer = ECDSA.recover(digest, r, vs);
-        if (signer == address(0) || signer != OKX_SIGNER) revert OSA_BadOkxSig();
+        if (signer != AUTH_SIGNER) revert AUTH_BadAuthSig();
 
-        if (block.timestamp > expiry) revert OSA_Expired();
-
-        if (!_isAllowedCaller(allowedCallers)) revert OSA_UntrustedCaller();
+        if (!_isAllowedCaller(allowedCallers)) revert AUTH_UntrustedCaller();
 
         _useNonce(nonce);
     }
 
     // =========================== Internal helpers ===========================
 
-    /// @dev msg.sender membership test against the signed allowedCallers set.
+    /// @dev Checks whether msg.sender is included in the signed caller set.
     function _isAllowedCaller(address[] memory allowedCallers) private view returns (bool) {
         uint256 len = allowedCallers.length;
         for (uint256 i; i < len; ++i) {
@@ -102,29 +78,22 @@ abstract contract CallerAuth {
         return false;
     }
 
-    /// @dev Consume a single-use nonce (Permit2-style bitmap). Reverts OSA_NonceUsed on reuse.
-    ///      Called before the inheriting adapter performs any external call/transfer (CEI).
+    /// @dev Consumes a nonce bit and reverts if it was already used.
     function _useNonce(uint256 nonce) private {
         uint256 wordPos = nonce >> 8;
         uint256 bit = 1 << (nonce & 0xff);
         uint256 word = _callerAuthNonceBitmap[wordPos];
-        if (word & bit != 0) revert OSA_NonceUsed();
+        if (word & bit != 0) revert AUTH_NonceUsed();
         _callerAuthNonceBitmap[wordPos] = word | bit;
     }
 
-    /// @notice Read whether a nonce has already been consumed (test / off-chain observability).
+    /// @dev Exposes nonce state for tests and off-chain reads.
     function isNonceUsed(uint256 nonce) external view returns (bool) {
         uint256 bit = 1 << (nonce & 0xff);
         return _callerAuthNonceBitmap[nonce >> 8] & bit != 0;
     }
 
-    /// @dev Reads the -64 calldata word injected by CommonLib.exeAdapter and returns the original
-    ///      outermost DexRouter caller using EXACT-match marker validation:
-    ///      `word & MARKER_MASK == DEX_ROUTER_CALLER_MARKER`. Unlike the legacy ORIGIN_PAYER subset
-    ///      match (which treats 0 bits as wildcards), a forged high-48-bit-all-1 word cannot pass, so a
-    ///      missing or spoofed marker fails closed to address(0). Shared by every caller-bound adapter
-    ///      (DynamicRoute, NativePmmAdapterV4). MARKER_MASK / DEX_ROUTER_CALLER_MARKER / _ADDRESS_MASK
-    ///      are the file-level constants from Constants.sol.
+    /// @dev Returns the address embedded in the -64 calldata word when its marker matches exactly.
     function _extractDexRouterCaller() internal pure returns (address dexRouterCaller) {
         /// @solidity memory-safe-assembly
         assembly {

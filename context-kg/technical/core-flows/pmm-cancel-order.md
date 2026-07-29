@@ -21,7 +21,7 @@ A maker preemptively invalidates a previously-signed RFQ ID before any taker has
 
 ## Step-by-Step Flow
 
-`PmmProtocol.sol:357-367`:
+`PmmProtocol.sol:307-317`:
 
 1. Caller (the maker) invokes `cancelOrderRFQ(uint64 rfqId)`.
 2. `maker = msg.sender` is bound.

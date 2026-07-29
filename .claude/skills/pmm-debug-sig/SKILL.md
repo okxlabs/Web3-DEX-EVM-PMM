@@ -31,6 +31,8 @@ There are **TWO independent signatures** in a Permit2 flow:
 | **OrderRFQ signature** | PmmProtocol domain | Maker EOA | PmmProtocol contract (ECDSA.recover) |
 | **Permit2 signature** | Permit2 domain | Maker EOA | Permit2 contract |
 
+Caller authorization is a separate EIP-191 signature supplied by the routing integration.
+
 **Ask the user:** Which signature is failing? OrderRFQ or Permit2? Or both?
 
 ### Step 2: Verify OrderRFQ Signature
@@ -38,39 +40,37 @@ There are **TWO independent signatures** in a Permit2 flow:
 #### 2a. Domain Separator
 
 ```javascript
-// MUST match the deployed contract's domain (PmmProtocol.sol:58-59)
+// MUST match the deployed contract's domain (PmmProtocol.sol:59-60)
 const domain = {
-  name: "OKX Labs PMM Protocol",     // PmmProtocol.sol:58
-  version: "1.1",                    // PmmProtocol.sol:59
+  name: "OKX Labs PMM Protocol",     // PmmProtocol.sol:59
+  version: "1.2",                    // PmmProtocol.sol:60
   chainId: <CORRECT_CHAIN_ID>,       // <-- Must match deployment chain
   verifyingContract: <PmmProtocol>   // <-- Must match actual contract address
 };
 ```
 
-**Script status (updated 2026-03-11):**
-- `script/signOrderRFQ.js` — FIXED: version corrected to `"1.1"`
-- `script/verifyDigest.js` — removed from repo (was outdated: wrong domain name, missing confidence fields)
+Reference implementation: `script/signOrderRFQ.js`; run `node script/testSignOrder.js` for a self-check.
 
 **Common errors:**
-- Wrong `version` string (contract uses `"1.1"`, older code may use `"1.0"`)
+- Wrong `version` string (contract uses `"1.2"`)
 - Wrong domain name (was renamed from `"OnChain Labs"` to `"OKX Labs"`)
 - Wrong `chainId` (e.g., using mainnet chainId on testnet)
 - Wrong `verifyingContract` (using Adaptor address instead of PmmProtocol)
 
-**Verification:** Read `src/EIP712.sol` to confirm the domain parameters:
+**Verification:** Read `src/PmmProtocol.sol` to confirm the domain parameters:
 ```bash
 # Check domain name and version in contract
-grep -n "PMM Protocol\|version" src/EIP712.sol
+grep -n "_NAME\|_VERSION" src/PmmProtocol.sol
 ```
 
 #### 2b. Typehash
 
 ```
-OrderRFQ(uint256 rfqId,uint256 expiry,address makerAsset,address takerAsset,address makerAddress,uint256 makerAmount,uint256 takerAmount,bool usePermit2,uint256 confidenceT,uint256 confidenceWeight,uint256 confidenceCap,bytes permit2Signature,bytes32 permit2Witness,string permit2WitnessType)
+OrderRFQ(uint256 rfqId,uint256 expiry,address makerAsset,address takerAsset,address makerAddress,uint256 makerAmount,uint256 takerAmount,bool usePermit2,address allowedSender,uint256 confidenceT,uint256 confidenceWeight,uint256 confidenceCap,bytes permit2Signature,bytes32 permit2Witness,string permit2WitnessType)
 ```
 
 **Common errors:**
-- Missing fields (e.g., old code without confidence fields)
+- Missing fields (for example, `allowedSender` or confidence fields)
 - Wrong field order
 - Extra spaces or commas in the type string
 
@@ -89,6 +89,7 @@ abi.encode(
   order.makerAmount,
   order.takerAmount,
   order.usePermit2,
+  order.allowedSender,
   order.confidenceT,
   order.confidenceWeight,
   order.confidenceCap,
@@ -138,7 +139,7 @@ const signature = concat([sig.r, sig.s, toBeHex(sig.v, 1)]);  // 65 bytes
 // Permit2 domain type — note NO version field!
 const PERMIT2_DOMAIN_TYPE = "EIP712Domain(string name,uint256 chainId,address verifyingContract)";
 
-// Compute (from verifyDigest.js:150-163):
+// Compute manually:
 const permit2DomainSeparator = keccak256(abi.encode(
   keccak256(toUtf8Bytes(PERMIT2_DOMAIN_TYPE)),  // 3-field type hash
   keccak256(toUtf8Bytes("Permit2")),
@@ -220,16 +221,6 @@ const witnessHash = keccak256(abi.encode(
 
 ### Step 4: Cross-Check Tool
 
-**WARNING:** `script/verifyDigest.js` is outdated (as of 2026-03-11) — it uses wrong domain name, wrong version, and missing confidence fields. Use it only for Permit2 signing logic reference, NOT for OrderRFQ verification.
-
-**Test vectors from verifyDigest.js** (useful for Permit2 signing validation):
-```javascript
-// Hardhat #0 private key
-const PRIVATE_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-// Expected hashes (for the OLD domain/typehash, but Permit2 witness hash is still valid):
-const EXPECTED_PERMIT2_WITNESS = "0x951f9706fd39d6a67e130deab708eb03c7fbd0df5fc94466f7011f3ff8bd9b49";
-```
-
 **Signing order matters:**
 1. Sign Permit2 FIRST (produces `permit2Signature` bytes)
 2. Then sign OrderRFQ (which includes `keccak256(permit2Signature)` in its struct hash)
@@ -237,7 +228,7 @@ const EXPECTED_PERMIT2_WITNESS = "0x951f9706fd39d6a67e130deab708eb03c7fbd0df5fc9
 Run verification:
 ```bash
 cd <project-root>
-node script/verifyDigest.js  # outdated but useful for Permit2 step validation
+node script/testSignOrder.js
 ```
 
 ### Step 5: On-Chain Verification
@@ -265,7 +256,7 @@ cast wallet verify --address <expected_signer> <message_hash> <signature>
 
 ### Pattern 3: "Worked before, now fails after upgrade"
 **Cause:** OrderRFQ struct changed (new fields added)
-**Fix:** Update typehash to include all current fields (confidenceT/Weight/Cap)
+**Fix:** Update the typehash to include `allowedSender` and all confidence fields
 
 ### Pattern 4: "Permit2 witness sig fails"
 **Cause:** Witness type string format error
@@ -291,7 +282,7 @@ When debugging, output results in this format:
 
 --- OrderRFQ Signature ---
 Domain Name:        "OKX Labs PMM Protocol"
-Domain Version:     "1.1"
+Domain Version:     "1.2"
 Domain ChainId:     [value]
 Domain Contract:    [address]
 Domain Separator:   [computed hash]

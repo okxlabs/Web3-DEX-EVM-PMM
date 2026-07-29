@@ -8,15 +8,12 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.
 import {OrderRFQLib} from "./OrderRFQLib.sol";
 import {CallerAuth} from "./libraries/CallerAuth.sol";
 import {Errors} from "./libraries/Errors.sol";
-import {ORIGIN_PAYER, _ADDRESS_MASK} from "./libraries/Constants.sol";
+import {ORIGIN_PAYER, MARKER_MASK, _ADDRESS_MASK} from "./libraries/Constants.sol";
 
-/// @notice Bundled OKX caller-auth parameters forwarded through the adapter for orderType=4.
-///         Mirrors the (allowedCallers, nonce, expiry, okxSig) tuple that CallerAuth verifies.
-struct OkxAuth {
-    address[] allowedCallers; // trusted caller set the OKX signature authorises
-    uint256 nonce; // single-use nonce (replay protection)
-    uint256 expiry; // unix timestamp after which the signature is invalid
-    bytes okxSig; // EIP-2098 compact 64-byte signature by OKX_SIGNER
+struct CallerAuthData {
+    address[] allowedCallers;
+    uint256 nonce;
+    bytes authSig;
 }
 
 interface IPMMProtocolV1 {
@@ -81,10 +78,6 @@ interface IPMMProtocolV3 {
     function DOMAIN_SEPARATOR() external view returns (bytes32);
 }
 
-/// @dev V4 (anti-toxic-flow, SCDEX-1157) unique settlement entry on PMMProtocol. The order
-///      carries the new required `allowedSender` field and the call is bound to the OKX-backend
-///      caller-auth params (allowedCallers/nonce/expiry/okxSig). Uses the canonical
-///      OrderRFQLib.OrderRFQ so the adapter's encoding stays in sync with the protocol.
 interface IPMMProtocolV4 {
     function fillOrderRFQTo(
         OrderRFQLib.OrderRFQ memory order,
@@ -93,8 +86,7 @@ interface IPMMProtocolV4 {
         address target,
         address[] calldata allowedCallers,
         uint256 nonce,
-        uint256 expiry,
-        bytes calldata okxSig
+        bytes calldata authSig
     ) external returns (uint256, uint256, bytes32);
 }
 
@@ -124,7 +116,7 @@ contract PMMAdapter is CallerAuth, ReentrancyGuard {
         uint256 confidenceCap; // order.confidenceCap    ┘
     }
 
-    constructor(address okxSigner) CallerAuth(okxSigner) {}
+    constructor(address authSigner) CallerAuth(authSigner) {}
 
     function _PMMSwap(address to, address pool, bytes memory moreInfo, uint256 payerOrigin) internal {
         (bytes memory orderInfo, bytes memory signature, uint256 signatureType, uint256 orderType) =
@@ -262,15 +254,6 @@ contract PMMAdapter is CallerAuth, ReentrancyGuard {
         _handleRefund(order.takerAsset, payerOrigin);
     }
 
-    /// @dev orderType=4 (anti-toxic-flow, SCDEX-1157 FR-5/FR-3). New path only; V1/V2/V3 above
-    ///      are unchanged. `orderInfo = abi.encode(OrderRFQ order, OkxAuth adaptorAuth, OkxAuth
-    ///      protocolAuth)`. Steps:
-    ///        1. Bind THIS adapter call to the OKX signature (allowedCallers=[DexRouter,DynamicRoute]).
-    ///        2. Anti-toxic-flow check: `order.allowedSender` must be set and equal the outermost
-    ///           DexRouter caller read from the `dexRouterCaller` calldata word at offset -64 (exact marker
-    ///           match, fail-closed) — else revert RFQ_BadSender.
-    ///        3. Fill via the protocol's unique entry, forwarding `protocolAuth` (bound to the
-    ///           protocol, allowedCallers=[PmmAdapter]) verbatim.
     function _executeV4Order(
         address to,
         address pool,
@@ -279,22 +262,20 @@ contract PMMAdapter is CallerAuth, ReentrancyGuard {
         uint256 signatureType,
         uint256 payerOrigin
     ) internal {
-        (OrderRFQLib.OrderRFQ memory order, OkxAuth memory adaptorAuth, OkxAuth memory protocolAuth) =
-            abi.decode(orderInfo, (OrderRFQLib.OrderRFQ, OkxAuth, OkxAuth));
+        (OrderRFQLib.OrderRFQ memory order, CallerAuthData memory adaptorAuth, CallerAuthData memory protocolAuth) =
+            abi.decode(orderInfo, (OrderRFQLib.OrderRFQ, CallerAuthData, CallerAuthData));
 
-        // 1. Caller binding: only DexRouter / DynamicRoute (per the OKX-signed allowedCallers)
-        //    may drive this adapter path.
-        _verifyCallerAuth(adaptorAuth.allowedCallers, adaptorAuth.nonce, adaptorAuth.expiry, adaptorAuth.okxSig);
+        _verifyCallerAuth(
+            keccak256(abi.encode(order)),
+            adaptorAuth.allowedCallers,
+            adaptorAuth.nonce,
+            adaptorAuth.authSig
+        );
 
-        // 2. Anti-toxic-flow: allowedSender must be filled (non-zero) and match the outermost
-        //    DexRouter caller. `_extractDexRouterCaller()` returns address(0) on a missing/forged
-        //    marker, so a fail-closed zero can never satisfy a non-zero allowedSender either.
-        address dexRouterCaller = _extractDexRouterCaller();
-        if (order.allowedSender == address(0) || order.allowedSender != dexRouterCaller) {
+        if (order.allowedSender == address(0) || order.allowedSender != _extractDexRouterCaller()) {
             revert Errors.RFQ_BadSender(order.rfqId);
         }
 
-        // 3. Approve taker leg and settle via the protocol's unique entry.
         uint256 flagsAndAmount;
         {
             uint256 amount = IERC20(order.takerAsset).balanceOf(address(this));
@@ -316,8 +297,7 @@ contract PMMAdapter is CallerAuth, ReentrancyGuard {
                 to,
                 protocolAuth.allowedCallers,
                 protocolAuth.nonce,
-                protocolAuth.expiry,
-                protocolAuth.okxSig
+                protocolAuth.authSig
             ),
             order.rfqId
         );
@@ -327,7 +307,7 @@ contract PMMAdapter is CallerAuth, ReentrancyGuard {
 
     function _handleRefund(address takerAsset, uint256 payerOrigin) internal {
         address _payerOrigin;
-        if ((payerOrigin & ORIGIN_PAYER) == ORIGIN_PAYER) {
+        if ((payerOrigin & MARKER_MASK) == ORIGIN_PAYER) {
             _payerOrigin = address(uint160(uint256(payerOrigin) & _ADDRESS_MASK));
         }
         uint256 amountLeft = IERC20(takerAsset).balanceOf(address(this));
@@ -442,21 +422,23 @@ contract PMMAdapter is CallerAuth, ReentrancyGuard {
             // RFQ_ConfidenceCapExceeded(uint256 rfqId);
             revert(string(abi.encodePacked("RFQ_ConfidenceCapExceeded ", rfqId.toString())));
         } else if (selector == Errors.RFQ_BadSender.selector) {
-            // RFQ_BadSender(uint256 rfqId); (anti-toxic-flow) — mapped for observability if it
-            // ever bubbles up from a sub-call; the adapter itself reverts it directly in orderType=4.
+            // RFQ_BadSender(uint256 rfqId);
             revert(string(abi.encodePacked("RFQ_BadSender ", rfqId.toString())));
-        } else if (selector == CallerAuth.OSA_ZeroSigner.selector) {
-            revert(string(abi.encodePacked("OSA_ZeroSigner ", rfqId.toString())));
-        } else if (selector == CallerAuth.OSA_Expired.selector) {
-            revert(string(abi.encodePacked("OSA_Expired ", rfqId.toString())));
-        } else if (selector == CallerAuth.OSA_UntrustedCaller.selector) {
-            revert(string(abi.encodePacked("OSA_UntrustedCaller ", rfqId.toString())));
-        } else if (selector == CallerAuth.OSA_BadOkxSig.selector) {
-            revert(string(abi.encodePacked("OSA_BadOkxSig ", rfqId.toString())));
-        } else if (selector == CallerAuth.OSA_BadSigLen.selector) {
-            revert(string(abi.encodePacked("OSA_BadSigLen ", rfqId.toString())));
-        } else if (selector == CallerAuth.OSA_NonceUsed.selector) {
-            revert(string(abi.encodePacked("OSA_NonceUsed ", rfqId.toString())));
+        } else if (selector == Errors.RFQ_InvalidRfqId.selector) {
+            // RFQ_InvalidRfqId(uint256 rfqId);
+            revert(string(abi.encodePacked("RFQ_InvalidRfqId ", rfqId.toString())));
+        } else if (selector == CallerAuth.AUTH_ZeroSigner.selector) {
+            revert(string(abi.encodePacked("AUTH_ZeroSigner ", rfqId.toString())));
+        } else if (selector == CallerAuth.AUTH_UntrustedCaller.selector) {
+            revert(string(abi.encodePacked("AUTH_UntrustedCaller ", rfqId.toString())));
+        } else if (selector == CallerAuth.AUTH_BadAuthSig.selector) {
+            revert(string(abi.encodePacked("AUTH_BadAuthSig ", rfqId.toString())));
+        } else if (selector == CallerAuth.AUTH_BadSigLen.selector) {
+            revert(string(abi.encodePacked("AUTH_BadSigLen ", rfqId.toString())));
+        } else if (selector == CallerAuth.AUTH_NonceUsed.selector) {
+            revert(string(abi.encodePacked("AUTH_NonceUsed ", rfqId.toString())));
+        } else if (selector == CallerAuth.AUTH_BadCallersLength.selector) {
+            revert(string(abi.encodePacked("AUTH_BadCallersLength ", rfqId.toString())));
         } else {
             // Fallback: the underlying revert selector matched none of the known cases above.
             // Only for enabled (Permit2) orders do we attempt a read-only maker

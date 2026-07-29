@@ -1,23 +1,17 @@
 ---
-squad: web3-dex
 domain: pmm
 sub_domain: pmm_adapter_migration
-title: PMMAdapter V1/V2/V3 OrderRFQ Migration
-source_docs: ["README.md (Document Versions §2.1)", "docs/research-design-note.md (SCDEX-1157)", "src/PmmAdaptor.sol", "src/libraries/Errors.sol", "DEPLOYMENT.md"]
+title: PMMAdapter V1/V2/V3/V4 OrderRFQ Routing
+source_docs: ["README.md", "src/PmmAdaptor.sol", "src/OrderRFQLib.sol", "src/libraries/CallerAuth.sol", "src/libraries/Errors.sol", "DEPLOYMENT.md"]
 concept_keys: [PmmAdapter, OrderRFQV1, OrderRFQV2, OrderRFQV3, OrderType, OrderType4, SignatureType, SellBase, SellQuote, PayerOrigin, RefundFlow]
-organized_at: 2026-06-01T00:00:00Z
-last_updated: 2026-07-05
+last_updated: 2026-07-27
 ---
 
-# PMMAdapter V1/V2/V3 OrderRFQ Migration
-
-> Business line: Web3 DEX (PMM Aggregator Integration)
-
-> **SCDEX-1157 update (2026-07-05).** The adapter added a **fourth** order type, `orderType == 4` (anti-toxic-flow), and now **inherits `CallerAuth` + `ReentrancyGuard`** — it is no longer stateless. The V1/V2/V3 legacy shapes and dispatch below are unchanged. The new path (`allowedSender == dexRouterCaller` + OKX caller binding) is documented in [[pmm_anti_toxic_flow]]; this doc stays focused on the legacy version migration.
+# PMMAdapter V1/V2/V3/V4 OrderRFQ Routing
 
 ## One-line Summary
 
-`PMMAdapter` is the OKX DEX aggregator's dispatch layer: it accepts a versioned `OrderRFQ` payload (V1 / V2 / V3 legacy, plus V4/orderType=4 anti-toxic), approves the downstream `PMMProtocol` (called `pool`) for the taker asset balance the adapter currently holds, forwards the fill, refunds any leftover, and decodes downstream `RFQ_*` custom errors into human-readable strings. The three legacy versions exist for **backward compatibility** with in-flight maker quotes during protocol upgrades. As of SCDEX-1157 the adapter inherits `CallerAuth` + `ReentrancyGuard` (carries nonce/reentrancy storage — no longer stateless).
+`PMMAdapter` accepts three legacy `OrderRFQ` payloads and the current V4 payload, approves the downstream `PMMProtocol` for the taker-asset balance it holds, forwards the fill, refunds eligible residuals, and translates downstream custom errors. It inherits `CallerAuth` and `ReentrancyGuard` and therefore carries nonce and reentrancy storage.
 
 ---
 
@@ -25,27 +19,26 @@ last_updated: 2026-07-05
 
 - **Positioning**: As the PMM RFQ struct has evolved (v2 → v3 → v4 in the README's version history), maker tooling and live signed orders cannot all be migrated atomically. The adapter pins three concrete `OrderRFQ` shapes and dispatches based on a caller-supplied `orderType` so older signed quotes can still settle while makers upgrade.
 - **Boundary notes**:
-  - **In scope (this doc)**: the three `OrderRFQ` shapes (`IPMMProtocolV1.OrderRFQ`, `V2`, `V3`); the `orderType` dispatch table; aggregator-side approval and refund flow; downstream error decoding.
+  - **In scope (this doc)**: the four order payload shapes (`IPMMProtocolV1.OrderRFQ`, `V2`, `V3`, plus the V4 route over `OrderRFQLib.OrderRFQ`); the `orderType` dispatch table; aggregator-side approval and refund flow; downstream error decoding.
   - **Out of scope (here)**: the actual settlement semantics that run inside `PMMProtocol` — see [[pmm_settlement]]; aggregator-side route selection, quoting, and pricing.
-  - **Not in this repo**: the aggregator router itself; the maker quoting service; the off-chain Apollo auto-offline monitor — see [[pmm_auto_offline]].
 
 ## 2. Core Content
 
 ### 2.1 OrderRFQ Version Shapes
 
-The adapter declares three `OrderRFQ` interfaces in `src/PmmAdaptor.sol` (lines 8-68). Each represents a frozen snapshot of the struct at a given protocol version:
+The adapter declares four protocol interfaces in `src/PmmAdaptor.sol`: `IPMMProtocolV1` (:19-34), `IPMMProtocolV2` (:36-54), `IPMMProtocolV3` (:56-79), and `IPMMProtocolV4` (:81-91). V1-V3 each embed a frozen snapshot of the `OrderRFQ` struct at that protocol version; `IPMMProtocolV4` embeds no struct and reuses `OrderRFQLib.OrderRFQ` directly. A shared `struct CallerAuthData` (:13-17) carries the V4 caller-authorization tuples.
 
 | Version | Field Count | Defined In | Adds vs Previous |
 |---------|-------------|------------|------------------|
-| V1 | 8 fields | `src/PmmAdaptor.sol:8-18` (interface `IPMMProtocolV1`) | Baseline: `rfqId, expiry, makerAsset, takerAsset, makerAddress, makerAmount, takerAmount, usePermit2`. (Source: src/PmmAdaptor.sol:9-17) |
-| V2 | 11 fields | `src/PmmAdaptor.sol:25-43` (interface `IPMMProtocolV2`) | Adds inline Permit2 fields: `bytes permit2Signature, bytes32 permit2Witness, string permit2WitnessType`. (Source: src/PmmAdaptor.sol:35-37) |
-| V3 | 14 fields | `src/PmmAdaptor.sol:45-68` (interface `IPMMProtocolV3`) | Adds time-slippage fields: `uint256 confidenceT, uint256 confidenceWeight, uint256 confidenceCap`. (Source: src/PmmAdaptor.sol:55-57) |
+| V1 | 8 fields | `src/PmmAdaptor.sol:19-34` (interface `IPMMProtocolV1`) | Baseline: `rfqId, expiry, makerAsset, takerAsset, makerAddress, makerAmount, takerAmount, usePermit2`. (Source: src/PmmAdaptor.sol:21-28) |
+| V2 | 11 fields | `src/PmmAdaptor.sol:36-54` (interface `IPMMProtocolV2`) | Adds inline Permit2 fields: `bytes permit2Signature, bytes32 permit2Witness, string permit2WitnessType`. (Source: src/PmmAdaptor.sol:46-48) |
+| V3 | 14 fields | `src/PmmAdaptor.sol:56-79` (interface `IPMMProtocolV3`) | Adds time-slippage fields: `uint256 confidenceT, uint256 confidenceWeight, uint256 confidenceCap`. (Source: src/PmmAdaptor.sol:66-68) |
 
-As of SCDEX-1157 the live struct in `src/OrderRFQLib.sol` is **15 fields** (V3's 14 fields + `allowedSender`) and no longer matches the `IPMMProtocolV3` interface; it is consumed by the new orderType=4 path (`IPMMProtocolV4`, which reuses `OrderRFQLib.OrderRFQ` directly). The three frozen `IPMMProtocolV{1,2,3}` interfaces remain for legacy in-flight quotes. (Source: src/PmmAdaptor.sol:59-99 + src/OrderRFQLib.sol:8-24)
+The current struct in `src/OrderRFQLib.sol` has **15 fields** (V3's 14 fields plus `allowedSender`) and is consumed by orderType=4 through `IPMMProtocolV4`. The three frozen `IPMMProtocolV{1,2,3}` interfaces remain for legacy orders.
 
 ### 2.2 Aggregator Dispatch Flow (`SellBase` / `SellQuote`)
 
-**Entry points** (`src/PmmAdaptor.sol:197-213`):
+**Entry points** (`src/PmmAdaptor.sol:319-335`):
 
 ```solidity
 function sellBase(address to, address pool, bytes memory moreInfo)  external { ... }
@@ -57,27 +50,24 @@ Both are structurally **byte-for-byte identical** — they both call `_PMMSwap(t
 **Direction is NOT determined by which entry-point is called.** In some other AMM-style aggregator adapters, `sellBase` means `token0 → token1` and `sellQuote` means `token1 → token0` — i.e., direction is encoded in the method name. PMM does not work that way: the swap direction is encoded explicitly in `OrderRFQ.makerAsset` / `OrderRFQ.takerAsset` inside `moreInfo`. The dual entry-points exist to satisfy the aggregator's interface contract (which expects every adapter to expose both `sellBase` and `sellQuote`), but routing through one vs the other has no semantic effect for PMM.
 
 **Main flow**:
-1. Aggregator calls `sellBase` or `sellQuote` with `(to, pool, moreInfo)` plus a trailing 32-byte `payerOrigin` word. (Source: src/PmmAdaptor.sol:197-213)
-2. `_PMMSwap` decodes `moreInfo` as `(bytes orderInfo, bytes signature, uint256 signatureType, uint256 orderType)`. (Source: src/PmmAdaptor.sol:84-85)
+1. Aggregator calls `sellBase` or `sellQuote` with `(to, pool, moreInfo)` plus a trailing 32-byte `payerOrigin` word. (Source: src/PmmAdaptor.sol:319-335)
+2. `_PMMSwap` decodes `moreInfo` as `(bytes orderInfo, bytes signature, uint256 signatureType, uint256 orderType)`. (Source: src/PmmAdaptor.sol:122-123)
 3. Dispatch by `orderType`:
    - `1` → `_executeV1Order` (8-field decode)
    - `2` → `_executeV2Order` (11-field decode)
    - `3` → `_executeV3Order` (14-field decode)
-   - `4` → `_executeV4Order` (15-field OrderRFQ + two `OkxAuth` tuples; caller-auth + `allowedSender` check — see [[pmm_anti_toxic_flow]])
+   - `4` → `_executeV4Order` (15-field OrderRFQ + two `CallerAuthData` tuples; caller-auth + `allowedSender` check — see [[pmm_anti_toxic_flow]])
    - any other value → revert `"PMMAdapter: unsupported orderType"`.
-4. Each `_executeV*Order` does the same five steps:
-   1. Decode `orderInfo` into the matching `IPMMProtocolV{1,2,3}.OrderRFQ`. (Source: src/PmmAdaptor.sol:106, :135, :164)
-   2. `amount = min(IERC20(takerAsset).balanceOf(adapter), order.takerAmount)`. (Source: src/PmmAdaptor.sol:109-112, :138-141, :167-170)
-   3. `require(amount > 0, "Zero balance of PMM adapter")`.
-   4. `SafeERC20.safeApprove(takerAsset, pool, amount)` (OpenZeppelin `SafeERC20`, not the project's local one).
-   5. `flagsAndAmount = (signatureType == SignatureType.EIP1271 ? 1 << 254 : 0) + amount` — only bit 254 is set; never bits 252 / 253 / 255. (Source: src/PmmAdaptor.sol:115, :144, :173)
-   6. `_call(pool, abi.encodeWithSelector(IPMMProtocolV{1,2,3}.fillOrderRFQTo.selector, order, signature, flagsAndAmount, to), order.rfqId)`. (Source: src/PmmAdaptor.sol:118-122, :147-151, :177-181)
-5. `_handleRefund(takerAsset, payerOrigin)` — see §2.4. (Source: src/PmmAdaptor.sol:124, :153, :183)
+4. Every `_executeV*Order` shares a common core — decode `orderInfo`; `amount = min(IERC20(takerAsset).balanceOf(adapter), order.takerAmount)`; `require(amount > 0, "Zero balance of PMM adapter")`; `SafeERC20.safeApprove(takerAsset, pool, amount)` (OpenZeppelin `SafeERC20`, not the project's local one); `flagsAndAmount = (signatureType == SignatureType.EIP1271 ? 1 << 254 : 0) + amount` — only bit 254 is ever set, never bits 252 / 253 / 255 — then `_call` into `pool.fillOrderRFQTo`. But the four versions are NOT identical:
+   - **V1** is the plain five-step flow above, using the legacy 3-arg `_call` (maker-balance recheck disabled). (Source: src/PmmAdaptor.sol:138-165)
+   - **V2 / V3** additionally compute `fillMakerAmount` (pro-rata maker payout) and build a `MakerBalanceCheck` struct — `enabled` only when `usePermit2 && permit2Signature.length > 0`; V2 zeroes the confidence fields, V3 passes them through — and call the 4-arg `_call` so the fallback can attribute maker-balance failures. (Source: src/PmmAdaptor.sol:167-209, :211-255)
+   - **V4** decodes `(OrderRFQLib.OrderRFQ, CallerAuthData adaptorAuth, CallerAuthData protocolAuth)`, first runs `_verifyCallerAuth(keccak256(abi.encode(order)), adaptorAuth...)`, then requires `order.allowedSender` to be non-zero and equal to `_extractDexRouterCaller()` (else `RFQ_BadSender`), encodes with the 7-arg `IPMMProtocolV4.fillOrderRFQTo` selector, and forwards `protocolAuth` (`allowedCallers`, `nonce`, `authSig`) downstream. (Source: src/PmmAdaptor.sol:257-306)
+5. `_handleRefund(takerAsset, payerOrigin)` — see Section 2.4. (Source: src/PmmAdaptor.sol:164, :208, :254, :305)
 
 **Key constraints**:
-- [Rule] `orderType` MUST be `1`, `2`, or `3`. Any other value reverts `"PMMAdapter: unsupported orderType"`. (Source: src/PmmAdaptor.sol:94)
-- [Rule] The adapter MUST hold ≥ 1 unit of `takerAsset` when each `_executeV*Order` runs. Zero balance reverts `"Zero balance of PMM adapter"`. (Source: src/PmmAdaptor.sol:113, :142, :171)
-- [Rule] The adapter NEVER encodes bits 252 / 253 / 255 in `flagsAndAmount`. WETH-unwrap (bit 252), 65-byte signature pin (bit 253), and maker-side fill direction (bit 255) cannot be requested through this adapter — callers needing those must call `PMMProtocol` directly. (Source: src/PmmAdaptor.sol:115, :144, :173)
+- [Rule] `orderType` MUST be `1`, `2`, `3`, or `4`. Any other value reverts `"PMMAdapter: unsupported orderType"`. (Source: src/PmmAdaptor.sol:125-134)
+- [Rule] The adapter MUST hold ≥ 1 unit of `takerAsset` when each `_executeV*Order` runs. Zero balance reverts `"Zero balance of PMM adapter"`. (Source: src/PmmAdaptor.sol:153, :183, :227, :285)
+- [Rule] The adapter NEVER encodes bits 252 / 253 / 255 in `flagsAndAmount`. WETH-unwrap (bit 252), 65-byte signature pin (bit 253), and maker-side fill direction (bit 255) cannot be requested through this adapter — callers needing those must call `PMMProtocol` directly. (Source: src/PmmAdaptor.sol:155, :185, :229, :287)
 
 ### 2.3 Signature Type Selection (`SignatureType`)
 
@@ -85,7 +75,7 @@ Both are structurally **byte-for-byte identical** — they both call `_PMMSwap(t
 enum SignatureType { EIP712, EIP1271 }
 ```
 
-(`src/PmmAdaptor.sol:76-79`)
+(`src/PmmAdaptor.sol:101-104`)
 
 The aggregator passes `signatureType` inside `moreInfo`:
 - `EIP712` (value `0`) → bit 254 cleared; downstream `PMMProtocol` uses `ECDSA.recoverOrIsValidSignature`.
@@ -93,31 +83,32 @@ The aggregator passes `signatureType` inside `moreInfo`:
 
 ### 2.4 Refund Flow (`RefundFlow`, `PayerOrigin`)
 
-After the fill returns, the adapter may still hold residual `takerAsset` (because step 2.2.iv.b capped at `min(balance, takerAmount)`, but a downstream partial fill or rounding may consume less). `_handleRefund` recovers the address to refund from the trailing 32-byte calldata word.
+After the fill returns, the adapter may still hold residual `takerAsset` (because the Section 2.2 balance cap set `amount = min(balance, takerAmount)`, but a downstream partial fill or rounding may consume less). `_handleRefund` recovers the address to refund from the trailing 32-byte calldata word.
 
-**Main flow** (`src/PmmAdaptor.sol:186-195`):
-1. If `(payerOrigin & ORIGIN_PAYER) == ORIGIN_PAYER`, extract `_payerOrigin = address(uint160(payerOrigin & ADDRESS_MASK))`. (Source: src/PmmAdaptor.sol:188-190)
-2. Otherwise `_payerOrigin = address(0)` and no refund happens. (Source: src/PmmAdaptor.sol:187)
-3. `amountLeft = IERC20(takerAsset).balanceOf(adapter)`. (Source: src/PmmAdaptor.sol:191)
-4. If `amountLeft > 0 && _payerOrigin != address(0)` → `SafeERC20.safeTransfer(takerAsset, _payerOrigin, amountLeft)`. (Source: src/PmmAdaptor.sol:192-194)
+**Main flow** (`_handleRefund`, `src/PmmAdaptor.sol:308-317`):
+1. If `(payerOrigin & MARKER_MASK) == ORIGIN_PAYER`, extract `_payerOrigin = address(uint160(payerOrigin & _ADDRESS_MASK))`.
+2. Otherwise `_payerOrigin = address(0)` and no refund happens. Marker aliases such as `DEX_ROUTER_CALLER_MARKER` are rejected.
+3. `amountLeft = IERC20(takerAsset).balanceOf(adapter)`.
+4. If `amountLeft > 0 && _payerOrigin != address(0)` → `SafeERC20.safeTransfer(takerAsset, _payerOrigin, amountLeft)`.
 
-**Sentinel** (`src/PmmAdaptor.sol:73-74`):
+**Sentinel** (moved to `src/libraries/Constants.sol` — `MARKER_MASK` :9, `ORIGIN_PAYER` :13, `_ADDRESS_MASK` :17; imported by the adapter at `src/PmmAdaptor.sol:11`):
 ```solidity
-uint256 internal constant ORIGIN_PAYER = 0x3ca20afc2ccc0000000000000000000000000000000000000000000000000000;
-uint256 constant ADDRESS_MASK = 0x000000000000000000000000ffffffffffffffffffffffffffffffffffffffff;
+uint256 constant MARKER_MASK = 0xffffffffffff0000000000000000000000000000000000000000000000000000;
+uint256 constant ORIGIN_PAYER = 0x3ca20afc2ccc0000000000000000000000000000000000000000000000000000;
+uint256 constant _ADDRESS_MASK = 0x000000000000000000000000ffffffffffffffffffffffffffffffffffffffff;
 ```
 
-The high bits of the trailing word MUST match `ORIGIN_PAYER` for the refund to fire; otherwise the leftover stays in the adapter and would be consumed by the next caller's balance-of read.
+The high six bytes of the trailing word MUST exactly match `ORIGIN_PAYER` under `MARKER_MASK` for the refund to fire; otherwise the leftover stays in the adapter and could be consumed by the next caller's balance-of read.
 
 **Key constraints**:
-- [Rule] Aggregator MUST append a 32-byte trailing word whose high bits match `ORIGIN_PAYER` and whose low 160 bits are the payer address. Without it, leftover taker asset accumulates in the adapter and is "donated" to the next caller. (Source: src/PmmAdaptor.sol:186-195)
+- [Rule] Aggregator MUST append a 32-byte trailing word whose high bits match `ORIGIN_PAYER` and whose low 160 bits are the payer address. Without it, leftover taker asset accumulates in the adapter and is "donated" to the next caller. (Source: src/PmmAdaptor.sol:308-317)
 - [Pitfall] The adapter has no setter or owner; nobody can sweep stuck residuals. Aggregator-side hygiene is the only mitigation.
 
 ### 2.5 Downstream Error Decoding (`_call`)
 
-`_call` (`src/PmmAdaptor.sol:215-297`) wraps the low-level call to `pool.fillOrderRFQTo` and re-reverts known `RFQ_*` custom errors as human-readable strings of the form `"<ErrorName> <rfqId>"`.
+`_call` (legacy 3-arg wrapper `src/PmmAdaptor.sol:339-341`, which forwards with the maker-balance recheck disabled; 4-arg implementation `:343-469`) wraps the low-level call to `pool.fillOrderRFQTo` and re-reverts known custom errors as human-readable strings of the form `"<ErrorName> <rfqId>"`.
 
-**Recognised selectors** (one switch case per error, `src/PmmAdaptor.sol:230-293`):
+**Recognised selectors** (one switch case per error, `src/PmmAdaptor.sol:360-439`):
 
 | Selector | Error Name |
 |----------|-----------|
@@ -130,7 +121,7 @@ The high bits of the trailing word MUST match `ORIGIN_PAYER` for the refund to f
 | `0x51c6158e` | `RFQ_TakerAmountExceeded` |
 | `0x94d42471` | `RFQ_SwapWithZeroAmount` |
 | `0x6fe432b3` | `RFQ_InvalidatedOrder` |
-| `0xf4a08977` | `RFQ_EthDepositRejected` (no rfqId in error; adapter still appends rfqId for context) |
+| `0xf4a08977` | `RFQ_EthDepositRejected` (no rfqId in the error; re-thrown as plain `"RFQ_EthDepositRejected"` without rfqId, src/PmmAdaptor.sol:387-390) |
 | `0xf4059071` | `SafeTransferFromFailed` (re-emitted as `RFQ_SafeTransferFromFailed`) |
 | `0x8112e119` | `Permit2TransferAmountTooHigh` |
 | `0xfb7f5079` | `SafeTransferFailed` |
@@ -142,53 +133,45 @@ The high bits of the trailing word MUST match `ORIGIN_PAYER` for the refund to f
 | `0xa1475d7b` | `RFQ_SettlementAmountTooSmall` |
 | `0x589584f5` | `RFQ_OrderAlreadyCancelledOrUsed` |
 | `0x1204d22d` | `RFQ_ConfidenceCapExceeded` |
+| `0x015333a0` | `RFQ_BadSender` |
+| `0xc05bb6cf` | `RFQ_InvalidRfqId` |
+| `0xb08bb943` | `AUTH_ZeroSigner` |
+| `0x69b79ba5` | `AUTH_UntrustedCaller` |
+| `0x8c843811` | `AUTH_BadAuthSig` |
+| `0xba235405` | `AUTH_BadSigLen` |
+| `0x62406192` | `AUTH_NonceUsed` |
+
+The last seven entries (`RFQ_BadSender` :424, `RFQ_InvalidRfqId` :427, `AUTH_ZeroSigner` :430, `AUTH_UntrustedCaller` :432, `AUTH_BadAuthSig` :434, `AUTH_BadSigLen` :436, `AUTH_NonceUsed` :438) are matched in code via `Errors.X.selector` / `CallerAuth.X.selector` references rather than hardcoded hex, and each is re-thrown as `"<Name> <rfqId>"`.
 
 Fallback cases:
-- Empty revert data → `"RFQ: Unknown error <rfqId>"`. (Source: src/PmmAdaptor.sol:220-223)
-- Unrecognised selector → `"RFQ_Failed <rfqId>"`. (Source: src/PmmAdaptor.sol:294-296)
+- Revert data shorter than 4 bytes → `"RFQ: Unknown error <rfqId>"`. (Source: src/PmmAdaptor.sol:350-353)
+- Unrecognised selector → NOT unconditionally `"RFQ_Failed"`. When the `MakerBalanceCheck` passed to the 4-arg `_call` is enabled (V2/V3 orders with `usePermit2 && permit2Signature.length > 0`), the fallback first runs a read-only maker-balance recheck: `_safeBalanceOf(makerAsset, maker)` via staticcall (`src/PmmAdaptor.sol:474-481`); if the balance is below the fill's `makerAmount`, it recomputes the confidence-adjusted (time-slippage) threshold with `_getMakerAmountForBalanceCheck` (`:487-503`, mirroring the protocol's reduction; V2's zeroed confidence inputs leave the amount unchanged) and, if the balance is below even that adjusted threshold, reverts `"RFQ_SafeTransferFromFailed <rfqId>"`. Otherwise (check disabled, staticcall failed/short return, or balance sufficient) it degrades to `"RFQ_Failed <rfqId>"`. (Source: src/PmmAdaptor.sol:440-468)
 
 **Key constraints**:
-- [Rule] Any new custom error added to `src/libraries/Errors.sol` MUST also be added to the `_call` switch — otherwise the adapter falls back to the generic `"RFQ_Failed"` message and downstream debugging suffers. (Source: src/PmmAdaptor.sol:215-297)
+- [Rule] Any new custom error added to `src/libraries/Errors.sol` MUST also be added to the `_call` switch — otherwise the adapter falls back to the generic `"RFQ_Failed"` message and downstream debugging suffers. (Source: src/PmmAdaptor.sol:343-469)
 
-### 2.6 Upstream Caller: OKX DexRouter `exeAdapter` Convention
+### 2.6 Adapter Calling Convention
 
-`PMMAdapter` is one of dozens of DEX adapters in the OKX aggregator's adapter family. The aggregator's router (`GitHub-Web3-DEX-EVM/contracts/8/router/SmartSwapRouter.sol`) calls every adapter through the same generic helper `CommonLib.exeAdapter` — the calling convention is fixed by that interface, not by `PMMAdapter` itself.
+Before `sellBase` or `sellQuote` executes, the adapter must already hold the taker asset. Each `_executeV*Order` reads `IERC20(takerAsset).balanceOf(address(this))`; it does not pull funds from `msg.sender`.
 
-**Call chain from the aggregator side**:
-
-```
-DexRouter.smartSwap(...)
-  → SmartSwapRouter._exeForks(path)                          // GitHub-Web3-DEX-EVM/contracts/8/router/SmartSwapRouter.sol:292-346
-      ├─ decode rawData[i] → poolAddress + reverse + weight
-      ├─ TransferLib.transferInternal(payer, assetTo[i], fromToken, weighted_amount)
-      │   // ★ funds go to the adapter FIRST, then the adapter forwards to the pool
-      └─ CommonLib.exeAdapter(reverse, adapter, to, pool, extra, refundTo)  // GitHub-Web3-DEX-EVM/contracts/8/libraries/CommonLib.sol:56-95
-            ├─ if reverse  → adapter.sellQuote(to, pool, extra)
-            └─ if !reverse → adapter.sellBase (to, pool, extra)
-            ★ call uses abi.encodePacked + trailing 32-byte word = ORIGIN_PAYER + refundTo
-  → adapter.sellBase / sellQuote                              // PMM lands at src/PmmAdaptor.sol:197-213
-```
-
-**The `reverse` bit comes from `path.rawData[i]`**, bit 161 (`_REVERSE_MASK`). For AMM-style adapters this signals direction (sellBase = token0→token1, sellQuote = token1→token0). For PMM, both entry-points are byte-for-byte identical and direction comes from `OrderRFQ.makerAsset`/`takerAsset` (see §2.2).
-
-**Fund flow is "router pushes to adapter first"** — by the time `sellBase` / `sellQuote` runs, the adapter already holds the taker asset (router did `TransferLib.transferInternal` to the adapter address `assetTo[i]`). That's why `_executeV*Order` reads `IERC20(takerAsset).balanceOf(address(this))` (`src/PmmAdaptor.sol:109-112`). The adapter is a **transient custody point**, not a pass-through that pulls from `msg.sender`.
+Both entry points read an optional trailing refund marker at calldata `-32`. OrderType=4 additionally reads the router-caller marker at `-64`. The two markers use exact, distinct masked constants.
 
 **Key constraints**:
-- [Rule] `PMMAdapter` MUST tolerate the trailing 32-byte `ORIGIN_PAYER + refundTo` calldata word — without it the leftover taker asset donates to the next caller (see §2.4 RefundFlow). (Source: `GitHub-Web3-DEX-EVM/contracts/8/libraries/CommonLib.sol:73, 88`)
-- [Rule] `PMMAdapter` MUST NOT depend on which entry-point (`sellBase` vs `sellQuote`) was called — the `reverse` bit is consumed by `exeAdapter`, not by PMM (see §2.2). (Source: src/PmmAdaptor.sol:197-213 — identical bodies)
-- [Rule] `_executeV*Order` reads fund balance via `IERC20.balanceOf(address(this))`, NOT via a pull from `msg.sender` — the router-side `transferInternal` is what funded the adapter. (Source: src/PmmAdaptor.sol:109-112, 138-141, 167-170 vs `GitHub-Web3-DEX-EVM/contracts/8/router/SmartSwapRouter.sol:327-334`)
-- [Pitfall] If `PMMAdapter` were ever refactored to pull from `msg.sender` instead of read its own balance, the OKX router integration would silently break — the adapter would try to pull funds from the router itself, which never approved it. (Source: derived from the call convention above)
+- [Rule] Do not infer PMM trade direction from `sellBase` versus `sellQuote`; direction comes from `OrderRFQ.makerAsset` and `takerAsset`.
+- [Rule] Fund the adapter before entry. Refactoring it to pull from `msg.sender` changes the adapter contract.
+- [Rule] Include a valid refund marker when residual taker assets must be returned. Without one, `_handleRefund` intentionally skips the transfer.
+- [Rule] OrderType=4 requires a valid router-caller marker so `allowedSender` can be checked.
 
 ---
 
 ## 3. State Machine
 
-> The adapter has **no storage** (`forge inspect PMMAdapter storage-layout` returns empty) and therefore no state machine of its own. Each call is fully self-contained:
+The adapter stores caller-authorization nonce bits and the reentrancy status. Swap execution follows this flow:
 
 ```
 ENTRY (sellBase / sellQuote)
   └─► decode moreInfo
-        └─► dispatch by orderType (1/2/3)
+        └─► dispatch by orderType (1/2/3/4)
               └─► approve pool, call pool.fillOrderRFQTo
                     └─► _handleRefund
                           └─► EXIT
@@ -200,9 +183,9 @@ Failure exits short-circuit at any step; no rollback logic needed because of EVM
 
 ## 4. Core Calculation Rules
 
-- **`amount`** (per-call cap) = `min(IERC20(takerAsset).balanceOf(adapter), order.takerAmount)`. (Source: src/PmmAdaptor.sol:109-112)
-- **`flagsAndAmount`** = `(signatureType == EIP1271 ? 1 << 254 : 0) + amount`. (Source: src/PmmAdaptor.sol:115)
-- **`_payerOrigin`** = `address(uint160(payerOrigin & ADDRESS_MASK))` when `(payerOrigin & ORIGIN_PAYER) == ORIGIN_PAYER`, else `address(0)`. (Source: src/PmmAdaptor.sol:187-190)
+- **`amount`** (per-call cap) = `min(IERC20(takerAsset).balanceOf(adapter), order.takerAmount)`. (Source: src/PmmAdaptor.sol:149-152; same pattern at :179-182, :223-226, :281-284)
+- **`flagsAndAmount`** = `(signatureType == EIP1271 ? 1 << 254 : 0) + amount`. (Source: src/PmmAdaptor.sol:155, :185, :229, :287)
+- **`_payerOrigin`** = `address(uint160(payerOrigin & _ADDRESS_MASK))` when `(payerOrigin & MARKER_MASK) == ORIGIN_PAYER`, else `address(0)`. (Source: src/PmmAdaptor.sol:308-317)
 
 ---
 
@@ -210,10 +193,9 @@ Failure exits short-circuit at any step; no rollback logic needed because of EVM
 
 | Role | Permitted Actions | Constraints |
 |------|-------------------|-------------|
-| Aggregator router (any caller) | `sellBase(to, pool, moreInfo)`, `sellQuote(to, pool, moreInfo)` | `pool` is supplied per-call; nothing is pinned. The adapter is permissionless. (Source: src/PmmAdaptor.sol:197-213) |
+| Adapter caller | `sellBase(to, pool, moreInfo)`, `sellQuote(to, pool, moreInfo)` | Legacy order types do not check caller authorization. OrderType=4 requires `msg.sender` in `adaptorAuth.allowedCallers`. `pool` is supplied per-call. |
 
-- **Immutable roles**: `OKX_SIGNER` (from `CallerAuth`, set at deploy, used by orderType=4). No owner/admin. As of SCDEX-1157 `PMMAdapter` is no longer stateless (carries a caller-auth nonce bitmap + reentrancy status).
-- **Open question**: whether the aggregator deployment exposes `PMMAdapter` publicly or only behind a trusted router. The contract itself imposes no restriction. (See [[contract-PMMAdapter]] for the same open item flagged at the technical level.)
+- **Immutable roles**: `AUTH_SIGNER` is set at deploy and used by orderType=4. The adapter has no owner or admin.
 
 ---
 
@@ -225,14 +207,14 @@ Failure exits short-circuit at any step; no rollback logic needed because of EVM
 
 ## 7. Constraints & Risk Rules
 
-- [Rule] `orderType ∈ {1, 2, 3}` only — extending the version set requires both adding a new `IPMMProtocolV*` interface AND a new `_executeV*Order` branch in `_PMMSwap`. (Source: src/PmmAdaptor.sol:87-95)
-- [Rule] The adapter MUST hold ≥ 1 unit of the taker asset at each `_executeV*Order` entry; this is enforced by `require(amount > 0, "Zero balance of PMM adapter")`. (Source: src/PmmAdaptor.sol:113, :142, :171)
-- [Rule] The adapter uses OpenZeppelin's `safeApprove` (not the project's local `forceApprove`). OpenZeppelin's `safeApprove` reverts on non-zero current allowance for USDT-style tokens. Aggregator must ensure approval is zero before each call OR the maker pre-cleans approvals externally. (Source: src/PmmAdaptor.sol:114, :143, :172 vs src/libraries/SafeERC20.sol:82-91)
-- [Rule] Refund only fires when the trailing calldata word matches `ORIGIN_PAYER`. (Source: src/PmmAdaptor.sol:186-195)
-- [Rule] Every `RFQ_*` selector defined in `src/libraries/Errors.sol` MUST appear in `_call`'s switch. (Source: src/PmmAdaptor.sol:215-297)
-- [Pitfall] `sellBase` and `sellQuote` have byte-for-byte identical bodies. In AMM-style aggregator adapters one method name conventionally encodes a swap direction (base→quote vs quote→base); **PMM does not follow that convention** — direction is encoded in `OrderRFQ.makerAsset` / `takerAsset`. The dual entry-points exist only to satisfy the aggregator's interface contract. Consumers MUST NOT depend on which method is called to infer direction. (Source: src/PmmAdaptor.sol:197-213)
-- [Pitfall] The adapter encodes `flagsAndAmount` with at most bit 254. Aggregators that need WETH-unwrap, signature-length pinning, or maker-side fill direction must NOT use this adapter — they must call `PMMProtocol.fillOrderRFQTo` directly. (Source: src/PmmAdaptor.sol:115, :144, :173)
-- [Pitfall] Residual `takerAsset` left in the adapter (when no `ORIGIN_PAYER` is set) is permanently "donated" — there is no sweep function. (Source: src/PmmAdaptor.sol:186-195)
+- [Rule] `orderType ∈ {1, 2, 3, 4}` only. Extending the version set requires a matching protocol interface and execution branch.
+- [Rule] The adapter MUST hold ≥ 1 unit of the taker asset at each `_executeV*Order` entry; this is enforced by `require(amount > 0, "Zero balance of PMM adapter")`. (Source: src/PmmAdaptor.sol:153, :183, :227, :285)
+- [Rule] The adapter uses OpenZeppelin's `safeApprove` (not the project's local `forceApprove`). OpenZeppelin's `safeApprove` reverts on non-zero current allowance for USDT-style tokens. Aggregator must ensure approval is zero before each call OR the maker pre-cleans approvals externally. (Source: src/PmmAdaptor.sol:154, :184, :228, :286 vs src/libraries/SafeERC20.sol:82-91)
+- [Rule] Refund only fires when the trailing calldata word matches `ORIGIN_PAYER`. (Source: src/PmmAdaptor.sol:308-317)
+- [Rule] Every `RFQ_*` selector defined in `src/libraries/Errors.sol` MUST appear in `_call`'s switch. (Source: src/PmmAdaptor.sol:343-469)
+- [Pitfall] `sellBase` and `sellQuote` have byte-for-byte identical bodies. In AMM-style aggregator adapters one method name conventionally encodes a swap direction (base→quote vs quote→base); **PMM does not follow that convention** — direction is encoded in `OrderRFQ.makerAsset` / `takerAsset`. The dual entry-points exist only to satisfy the aggregator's interface contract. Consumers MUST NOT depend on which method is called to infer direction. (Source: src/PmmAdaptor.sol:319-335)
+- [Pitfall] The adapter encodes `flagsAndAmount` with at most bit 254. It does not expose WETH unwrap, signature-length pinning, or maker-side fill selection through its public entry points.
+- [Pitfall] Residual `takerAsset` left in the adapter (when no `ORIGIN_PAYER` is set) is permanently "donated" — there is no sweep function. (Source: src/PmmAdaptor.sol:308-317)
 
 ---
 
@@ -242,16 +224,18 @@ Failure exits short-circuit at any step; no rollback logic needed because of EVM
 - [ ] `sellBase` with `orderType = 3`, valid V3 order, EIP-712 signature: forwards correctly, leftover refunded to payer.
 - [ ] `sellQuote` produces the same output as `sellBase` for the same inputs.
 - [ ] `orderType = 1` (V1) and `orderType = 2` (V2): both still execute correctly, exercising backward compatibility.
+- [ ] `orderType = 4`: both caller authorizations validate, `allowedSender` matches, and the current protocol selector succeeds.
 - [ ] EIP-1271 signature path (`signatureType = 1`): bit 254 is set on `flagsAndAmount`.
 - [ ] Refund: when `ORIGIN_PAYER` sentinel matches, leftover `takerAsset` is transferred to the encoded payer address.
 
 ### Unhappy Path
-- [ ] `orderType = 0` or `orderType = 4` → revert `"PMMAdapter: unsupported orderType"`.
+- [ ] `orderType = 0` or `orderType = 5` → revert `"PMMAdapter: unsupported orderType"`.
 - [ ] Adapter has zero `takerAsset` balance → revert `"Zero balance of PMM adapter"`.
 - [ ] Downstream `RFQ_BadSignature` selector → string revert `"RFQ_BadSignature <rfqId>"`.
 - [ ] Downstream `RFQ_OrderExpired` selector → string revert `"RFQ_OrderExpired <rfqId>"`.
 - [ ] Downstream returns empty revert data → `"RFQ: Unknown error <rfqId>"`.
-- [ ] Downstream returns unrecognised selector → `"RFQ_Failed <rfqId>"`.
+- [ ] Downstream returns unrecognised selector (balance recheck disabled, or maker balance sufficient) → `"RFQ_Failed <rfqId>"`.
+- [ ] Downstream returns unrecognised selector on a V2/V3 Permit2 order (`usePermit2 && permit2Signature.length > 0`) whose maker balance is below the confidence-adjusted payout → `"RFQ_SafeTransferFromFailed <rfqId>"`.
 
 ### High-Risk Scenarios
 - [ ] USDT-style token: aggregator does not pre-clear adapter's existing approval → `safeApprove` reverts. Verify aggregator hygiene.
@@ -265,15 +249,15 @@ Failure exits short-circuit at any step; no rollback logic needed because of EVM
 
 | Term | Definition |
 |------|------------|
-| `PMMAdapter` | The dispatch contract in `src/PmmAdaptor.sol` (inherits `CallerAuth` + `ReentrancyGuard` as of SCDEX-1157; no longer stateless). Currently single deployment per chain (see `DEPLOYMENT.md`). |
+| `PMMAdapter` | The dispatch contract in `src/PmmAdaptor.sol`; inherits `CallerAuth` and `ReentrancyGuard`. |
 | `pool` | Per-call address of a `PMMProtocol` instance the adapter forwards into. |
-| `orderType` | Caller-supplied dispatch tag: `1` = V1, `2` = V2, `3` = V3. Defined inside the `moreInfo` payload. |
+| `orderType` | Caller-supplied dispatch tag: `1` = V1, `2` = V2, `3` = V3, `4` = current caller-bound V4. |
 | `sellBase` / `sellQuote` | The two external entry-points exposed by `PMMAdapter`. Byte-for-byte identical bodies. In AMM-style adapters these names conventionally signal swap direction; in PMM they do not — direction comes from `OrderRFQ.makerAsset` / `takerAsset`. |
 | `SignatureType.EIP712` | EOA / ECDSA signature path. |
 | `SignatureType.EIP1271` | Smart-contract signer path; sets bit 254 of `flagsAndAmount`. |
 | `IPMMProtocolV1.OrderRFQ` | 8-field shape (pre-Permit2 inline fields). |
 | `IPMMProtocolV2.OrderRFQ` | 11-field shape (adds `permit2Signature`, `permit2Witness`, `permit2WitnessType`). |
-| `IPMMProtocolV3.OrderRFQ` | 14-field legacy shape (adds `confidenceT`, `confidenceWeight`, `confidenceCap`). **No longer matches** the live `OrderRFQLib.OrderRFQ`, which is now 15 fields (SCDEX-1157 added `allowedSender`) and is used by the orderType=4 path via `IPMMProtocolV4`. |
+| `IPMMProtocolV3.OrderRFQ` | 14-field legacy shape (adds `confidenceT`, `confidenceWeight`, `confidenceCap`). The current 15-field `OrderRFQLib.OrderRFQ` adds `allowedSender` and is used by orderType=4 through `IPMMProtocolV4`. |
 | `PayerOrigin` | Trailing 32-byte calldata word; high bits sentinel + low 160 bits payer address. |
 | `ORIGIN_PAYER` | `0x3ca20afc2ccc0000…`; sentinel high-bit pattern enabling refund flow. |
 | `RefundFlow` | The `_handleRefund` step that returns any residual `takerAsset` to the payer. |

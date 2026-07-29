@@ -22,6 +22,7 @@ contract PMMProtocol is EIP712, CallerAuth, ReentrancyGuard {
      * @param makerAsset Address of the maker asset
      * @param takerAsset Address of the taker asset
      * @param makerAddress Address of the maker
+     * @param allowedSender Caller the order is bound to (adapter-enforced); zero means unbound
      * @param expectedMakerAmount Expected amount of maker asset
      * @param expectedTakerAmount Expected amount of taker asset
      * @param filledMakerAmount Actual amount of maker asset that was transferred
@@ -37,6 +38,7 @@ contract PMMProtocol is EIP712, CallerAuth, ReentrancyGuard {
         address indexed makerAsset,
         address indexed takerAsset,
         address makerAddress,
+        address allowedSender,
         uint256 expectedMakerAmount,
         uint256 expectedTakerAmount,
         uint256 filledMakerAmount,
@@ -57,9 +59,6 @@ contract PMMProtocol is EIP712, CallerAuth, ReentrancyGuard {
     event OrderCancelledRFQ(uint256 indexed rfqId, address indexed maker);
 
     string private constant _NAME = "OKX Labs PMM Protocol";
-    // Domain version bumped 1.1 -> 1.2: OrderRFQ gained the `allowedSender` field, changing the
-    // OrderRFQ typehash. The version bump invalidates old 1.1 signatures on the new contract
-    // (EIP-712 replay protection). See SCDEX-1157 FR-5 / research-design-note §4.
     string private constant _VERSION = "1.2";
 
     uint256 private constant _RAW_CALL_GAS_LIMIT = 5000;
@@ -76,7 +75,7 @@ contract PMMProtocol is EIP712, CallerAuth, ReentrancyGuard {
     IWETH private immutable _WETH;
     mapping(address => mapping(uint256 => uint256)) private _invalidator;
 
-    constructor(IWETH weth, address okxSigner) EIP712(_NAME, _VERSION) CallerAuth(okxSigner) {
+    constructor(IWETH weth, address authSigner) EIP712(_NAME, _VERSION) CallerAuth(authSigner) {
         _WETH = weth;
     }
 
@@ -101,14 +100,6 @@ contract PMMProtocol is EIP712, CallerAuth, ReentrancyGuard {
         return (bitMap & invalidatorBits) != 0;
     }
 
-    // Anti-toxic-flow (SCDEX-1157 FR-5 / FR-3): the settlement entry is converged to this
-    // single function, guarded on its first line by the OKX-backend caller binding
-    // (`_verifyCallerAuth`, allowedCallers == [PmmAdapter]). The prior fill variants
-    // (fillOrderRFQ / fillOrderRFQCompact / fillOrderRFQToWithPermit) were removed by design.
-    //
-    // NOTE: the protocol performs NO `allowedSender` check — that check lives in PmmAdapter.
-    // This function only binds *who may call it* (caller binding), never `allowedSender`.
-    //
     // This function does not support deflationary or rebasing tokens.
     // The protocol assumes standard token behavior with exact transfer amounts,
     // which is valid for mainstream tokens typically used by market makers.
@@ -119,11 +110,15 @@ contract PMMProtocol is EIP712, CallerAuth, ReentrancyGuard {
         address target,
         address[] calldata allowedCallers,
         uint256 nonce,
-        uint256 expiry,
-        bytes calldata okxSig
+        bytes calldata authSig
     ) public payable nonReentrant returns (uint256 filledMakerAmount, uint256 filledTakerAmount, bytes32 orderHash) {
-        // Caller binding first: only an OKX-authorised caller (PmmAdapter) may reach settlement.
-        _verifyCallerAuth(allowedCallers, nonce, expiry, okxSig);
+        if (order.rfqId > type(uint64).max) {
+            revert Errors.RFQ_InvalidRfqId(order.rfqId);
+        }
+        if (allowedCallers.length != 1) {
+            revert AUTH_BadCallersLength();
+        }
+        _verifyCallerAuth(keccak256(abi.encode(order)), allowedCallers, nonce, authSig);
 
         orderHash = order.hash(_domainSeparatorV4());
         if (flagsAndAmount & _SIGNER_SMART_CONTRACT_HINT != 0) {
@@ -145,6 +140,7 @@ contract PMMProtocol is EIP712, CallerAuth, ReentrancyGuard {
             order.makerAsset,
             order.takerAsset,
             order.makerAddress,
+            order.allowedSender,
             order.makerAmount,
             order.takerAmount,
             filledMakerAmount,

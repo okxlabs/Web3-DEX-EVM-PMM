@@ -22,7 +22,7 @@ OKX Labs PMM (Private Market Maker) RFQ Settlement Protocol integration guide.
 |------|---------|
 | `src/PmmProtocol.sol` | Main settlement contract - order fill, validation, transfers |
 | `src/OrderRFQLib.sol` | OrderRFQ struct definition and EIP-712 hash computation |
-| `src/PmmAdaptor.sol` | DEX aggregator adapter (supports V1/V2/V3 order formats) |
+| `src/PmmAdaptor.sol` | DEX aggregator adapter (supports V1/V2/V3/V4 order formats) |
 | `src/EIP712.sol` | EIP-712 domain separator |
 | `src/helpers/AmountCalculator.sol` | Proportional amount derivation for partial fills |
 | `src/libraries/Errors.sol` | All custom error definitions |
@@ -31,27 +31,27 @@ OKX Labs PMM (Private Market Maker) RFQ Settlement Protocol integration guide.
 
 ### Deployment Addresses
 
-See [DEPLOYMENT.md](../../DEPLOYMENT.md) for full V1/V2/V3 address list.
+See [DEPLOYMENT.md](../../../DEPLOYMENT.md) for the full V1–V4 address list.
 
-**V3 PmmProtocol (Current):**
-
-| Chain | Address |
-|-------|---------|
-| Ethereum | `0x5035D128ef482276Aa3bCce4307ffF8961ba30F9` |
-| Arbitrum | `0xcdC09a6B5211bb51F18A1Af7691B6725bB024434` |
-| Base | `0x4EFBd630205DD9B987c3BcbEe257600abC1e3C11` |
-| BNB Chain | `0xdD30339C4b2f7bac319Ef4Fa5c6963cc9F470B2d` |
-| XLayer | `0x5E18E052517Af66575105ACff6A7f17DED3f10F2` |
-
-**V3 PmmAdaptor (Current):**
+**V4 PmmProtocol (Current, EIP-712 domain version 1.2):**
 
 | Chain | Address |
 |-------|---------|
-| Ethereum | `0x10C40FEc71F6cd0F85613467eBa1857eCB1D1308` |
-| Arbitrum | `0xF2326e58A265f7020ED6D342A9Be4076B9fCF701` |
-| Base | `0xa16f075B61d379708485F66e15075C4b638dC554` |
-| BNB Chain | `0x85E569247f1c9b34E1d39Be41ae5194FB8f73156` |
-| XLayer | `0x5670035CAf2Da294Af4BCdC48fB68E9E6157a02e` |
+| Ethereum | `0x73b920dC64ab6156f2D22b85AB9A9b06E597e154` |
+| Arbitrum | `0x2C5486E06dB4F72E3eFd6bdd891Af50ee75b7e9e` |
+| Base | `0x9ECb5cf09eBb1Cb844b8e2C8cc7cB8b57643C6C8` |
+| BNB Chain | `0x8A35eE6d2d533e6b2934ceD4aff0aDd0C7af1769` |
+| XLayer | `0x31d7BCA06a0143ABc7c93418792Aae8AA69183b0` |
+
+**V4 PmmAdaptor (Current):**
+
+| Chain | Address |
+|-------|---------|
+| Ethereum | `0x4ecD468E1010E006f768EC034e5a6d8803183469` |
+| Arbitrum | `0x34fDA863Bfef0F976F5d0a0e366BC44883296Cf7` |
+| Base | `0x22eef0C15678c482DcAC05c0d102363fc31f8C81` |
+| BNB Chain | `0x9a8d68089aDBe8428f79c244d34276a9f4251070` |
+| XLayer | `0xa6566f0689a9ec2fdff3f6fd3ed58b227246765c` |
 
 **V2 PmmProtocol:**
 
@@ -94,6 +94,7 @@ struct OrderRFQ {
     uint256 makerAmount;      // Quoted maker size
     uint256 takerAmount;      // Quoted taker size
     bool usePermit2;          // Toggle Permit2 on maker leg
+    address allowedSender;    // Required outer transaction sender
     uint256 confidenceT;      // Unix timestamp: slippage starts after this (0 = disabled)
     uint256 confidenceWeight; // Reduction rate per second in 1e6 units (0 = disabled)
     uint256 confidenceCap;    // Max cumulative reduction in 1e6 units (max 50000 = 5%, 0 = disabled)
@@ -108,23 +109,21 @@ struct OrderRFQ {
 ### Domain
 
 ```javascript
-// Source of truth: PmmProtocol.sol lines 58-59
+// Source of truth: PmmProtocol.sol lines 59-60
 const domain = {
-  name: "OKX Labs PMM Protocol",   // PmmProtocol.sol:58
-  version: "1.1",                   // PmmProtocol.sol:59
+  name: "OKX Labs PMM Protocol",   // PmmProtocol.sol:59
+  version: "1.2",                   // PmmProtocol.sol:60
   chainId: <chainId>,
   verifyingContract: <PmmProtocol address>
 };
 ```
 
-**Script status (updated 2026-03-11):**
-- `signOrderRFQ.js` — FIXED: version corrected to `"1.1"`
-- `verifyDigest.js` — removed from repo (was outdated: wrong domain name, missing confidence fields)
+Reference implementation: `script/signOrderRFQ.js`; run `node script/testSignOrder.js` for a self-check.
 
 ### OrderRFQ Typehash
 
 ```
-OrderRFQ(uint256 rfqId,uint256 expiry,address makerAsset,address takerAsset,address makerAddress,uint256 makerAmount,uint256 takerAmount,bool usePermit2,uint256 confidenceT,uint256 confidenceWeight,uint256 confidenceCap,bytes permit2Signature,bytes32 permit2Witness,string permit2WitnessType)
+OrderRFQ(uint256 rfqId,uint256 expiry,address makerAsset,address takerAsset,address makerAddress,uint256 makerAmount,uint256 takerAmount,bool usePermit2,address allowedSender,uint256 confidenceT,uint256 confidenceWeight,uint256 confidenceCap,bytes permit2Signature,bytes32 permit2Witness,string permit2WitnessType)
 ```
 
 **IMPORTANT:** `bytes` fields are hashed with `keccak256()`, `string` fields are hashed with `keccak256(toUtf8Bytes())` before encoding.
@@ -142,6 +141,7 @@ const structHash = keccak256(abi.encode(
   order.makerAmount,
   order.takerAmount,
   order.usePermit2,
+  order.allowedSender,
   order.confidenceT,
   order.confidenceWeight,
   order.confidenceCap,
@@ -167,6 +167,8 @@ const signature = concat([sig.r, sig.s, toBeHex(sig.v, 1)]);
 ```
 
 Reference implementation: `script/signOrderRFQ.js`
+
+Caller authorization is a separate EIP-191 signature supplied by the routing integration.
 
 ## Permit2 Integration
 
@@ -265,7 +267,7 @@ The Permit2 contract has its own EIP-712 domain (separate from PmmProtocol's dom
 // Permit2 domain type (note: NO version field!)
 const PERMIT2_DOMAIN_TYPE = "EIP712Domain(string name,uint256 chainId,address verifyingContract)";
 
-// Compute manually (from verifyDigest.js:150-163):
+// Compute manually:
 const permit2DomainSeparator = keccak256(abi.encode(
   keccak256(toUtf8Bytes(PERMIT2_DOMAIN_TYPE)),
   keccak256(toUtf8Bytes("Permit2")),
@@ -279,7 +281,7 @@ const permit2DomainSeparator = await permit2Contract.DOMAIN_SEPARATOR();
 
 ### Critical Notes on Permit2 Signing
 
-1. **Two separate signatures required:** The order needs an EIP-712 OrderRFQ signature (signed against PmmProtocol domain), AND a Permit2 signature (signed against Permit2 domain). These are different digests with different domain separators.
+1. **Two maker signatures required:** The order needs an EIP-712 OrderRFQ signature (signed against PmmProtocol domain), AND a Permit2 signature (signed against Permit2 domain). These are different digests with different domain separators.
 2. **Nonce = rfqId:** Permit2 uses `order.rfqId` as the nonce. Each rfqId can only be used once.
 3. **Deadline = expiry:** Permit2 deadline is set to `order.expiry`.
 4. **Spender = PmmProtocol:** The spender in Permit2 is the PmmProtocol contract address.
@@ -342,17 +344,7 @@ if block.timestamp > confidenceT && all three params != 0:
 ### Fill Functions
 
 ```solidity
-// Fill to msg.sender
-fillOrderRFQ(OrderRFQ order, bytes signature, uint256 flagsAndAmount)
-
-// Fill to specific target
-fillOrderRFQTo(OrderRFQ order, bytes signature, uint256 flagsAndAmount, address target)
-
-// Execute ERC20 permit before filling
-fillOrderRFQToWithPermit(OrderRFQ order, bytes signature, uint256 flagsAndAmount, address target, bytes permit)
-
-// Compact signature (r, vs) format
-fillOrderRFQCompact(OrderRFQ order, uint256 r, uint256 vs, uint256 flagsAndAmount)
+fillOrderRFQTo(OrderRFQ order, bytes signature, uint256 flagsAndAmount, address target, address[] allowedCallers, uint256 nonce, bytes authSig)
 ```
 
 ### Settlement Limit
@@ -400,7 +392,7 @@ event OrderFilledRFQ(
 );
 ```
 
-## Order Scenarios (from testSignOrder.js)
+## Order Scenarios
 
 ### Scenario 1: No Permit2
 ```javascript
@@ -435,21 +427,20 @@ const CONSIDERATION = { token: MAKER_ASSET, amount: MAKER_AMOUNT, counterparty: 
 
 ## Quick Integration Checklist
 
-1. Construct `OrderRFQ` struct with all 14 fields
+1. Construct `OrderRFQ` struct with all 15 fields
 2. If using Permit2 with inline signature:
    a. Compute witness hash (if using witness mode)
    b. Sign Permit2 PermitTransferFrom against **Permit2 domain** (3-field, NO version)
    c. Set `permit2Signature`, `permit2Witness`, `permit2WitnessType` on order
-3. Sign OrderRFQ with maker's private key against **PmmProtocol domain** (4-field, version "1.1")
+3. Sign OrderRFQ with maker's private key against **PmmProtocol domain** (4-field, version "1.2")
    - NOTE: OrderRFQ signature covers the Permit2 signature bytes (hashed), so Permit2 must be signed FIRST
-4. Call `fillOrderRFQTo()` with order, OrderRFQ signature, flagsAndAmount, target
+4. Obtain `allowedCallers`, `nonce`, and `authSig` from the routing integration and call `fillOrderRFQTo()` with all seven arguments
 5. Handle events and errors appropriately
 
 ## Reference Files
 
-- Order signing: `script/signOrderRFQ.js` (WARNING: version "1.0" should be "1.1")
-- Sign test vectors: `script/testSignOrder.js` (4 scenarios: no-permit2, permit2-no-witness, ExampleWitness, Consideration)
-- Digest verification: `script/verifyDigest.js` (WARNING: outdated — wrong domain name, missing confidence fields)
+- Order signing: `script/signOrderRFQ.js`
+- Signing self-check: `script/testSignOrder.js`
 - Core contract: `src/PmmProtocol.sol`
 - Order struct: `src/OrderRFQLib.sol`
 - Tests: `test/PmmProtocol.t.sol`, `test/PmmProtocolTimeSlippage.t.sol`, `test/PmmProtocolPermitWitnessFork.t.sol`

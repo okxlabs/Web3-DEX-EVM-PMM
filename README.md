@@ -37,17 +37,17 @@ Private market makers plug into the OKX Labs DEX aggregator by returning signed 
 4. **Path selection** - During quote requests, the router simulates all paths and picks PMM legs when they win on price + gas.
 5. **Quote delivery** - Users review the combined quote and request calldata for the selected PMM order.
 6. **Order signature** - The maker service signs the `OrderRFQ` struct and, if needed, embeds a Permit2 witness signature.
-7. **Execution** - The taker broadcasts `fillOrderRFQ*` along with the maker signature (and optionally a Permit2 signature and/or ERC20 permit for the taker asset).
+7. **Execution** - The authorized adapter calls `fillOrderRFQTo` with the maker signature and caller-authorization parameters.
 8. **Settlement flow** - Maker funds move directly to the taker (or a specified target). Taker funds move to the maker, optionally wrapping/unwrapping WETH as dictated by the flags.
 
 ### 3.2 Key Characteristics
 
 - **Replay protection** - RFQ IDs are tracked per maker via bitmask invalidators and can also be cancelled on-chain.
-- **Deterministic signatures** - All fills rely on the `OrderRFQLib.hash` helper and the domain `"OKX Labs PMM Protocol" / v1.0`.
+- **Deterministic signatures** - All fills rely on the `OrderRFQLib.hash` helper and the domain `"OKX Labs PMM Protocol" / v1.2`.
 - **Partial fills** - Supported through `flagsAndAmount`, including maker- or taker-denominated inputs, while enforcing a 60% minimum settlement ratio.
 - **Permit2-native maker leg** - Makers can set `usePermit2=true` and optionally ship inline Permit2 signatures + witness metadata; otherwise standard `transferFrom` is used.
 - **WETH unwrap option** - Bit 252 unwraps WETH before forwarding funds, enabling native ETH settlement.
-- **Taker ERC20 permits** - `fillOrderRFQToWithPermit` can execute an ERC20 permit (EIP-2612 or Dai-like) before consuming the order.
+- **Caller binding** - The maker-signed `allowedSender` is checked by the V4 adapter, while both adapter and protocol verify caller authorization over the exact order.
 - **Time-slippage (confidence)** - Orders may include `confidenceT`, `confidenceWeight`, and `confidenceCap` fields. If `block.timestamp` exceeds `confidenceT`, the maker amount is reduced linearly over time (up to a 5% hard cap), giving makers built-in price protection against stale quotes.
 - **Security hardening** - Contract inherits `ReentrancyGuard`, validates signatures for EOAs or smart-contract signers, and rejects unexpected `msg.value`.
 
@@ -65,6 +65,7 @@ struct OrderRFQ {
     uint256 makerAmount;      // Quoted maker size
     uint256 takerAmount;      // Quoted taker size
     bool usePermit2;          // Toggles Permit2 transfers on the maker leg
+    address allowedSender;    // Address for which the maker issued the quote
     uint256 confidenceT;      // Unix timestamp after which time-slippage begins (0 = disabled)
     uint256 confidenceWeight; // Reduction rate per second in 1e6 units (0 = disabled)
     uint256 confidenceCap;    // Maximum cumulative reduction in 1e6 units (0 = disabled, max 50000 = 5%)
@@ -77,12 +78,13 @@ struct OrderRFQ {
 Field notes:
 - `rfqId` should fit within 64 bits; higher bits are truncated when the invalidator slot is computed.
 - `makerAmount`/`takerAmount` are capped by the settlement limit check (>= 60% when partially filling) and by the Permit2 `uint160` ceiling when `usePermit2` is true.
+- `allowedSender` is part of the EIP-712 digest and must match the outermost router caller on the V4 adapter path.
 - `confidenceT` / `confidenceWeight` / `confidenceCap` control the time-slippage mechanism. Setting any of them to zero disables slippage entirely. See [section 4.9](#49-time-slippage-confidence-mechanism) for details.
 - `permit2Signature` can be empty if the maker relies on pre-approved allowances with Permit2; if populated, it must encode either a standard `permitTransferFrom` (no witness data) or a `permitWitnessTransferFrom` payload whose witness fields match the values supplied alongside the order.
 
 ### 4.2 `flagsAndAmount`
 
-`flagsAndAmount` is a compact instruction word used across the fill functions.
+`flagsAndAmount` is a compact instruction word used by the fill function.
 
 | Bit | Constant | Description |
 |-----|----------|-------------|
@@ -128,15 +130,15 @@ event OrderCancelledRFQ(uint256 indexed rfqId, address indexed maker);
 - `DOMAIN_SEPARATOR()` - Returns the current EIP-712 domain separator.
 - `invalidatorForOrderRFQ(address maker, uint256 slot)` - Exposes the raw 256-bit bitmap for a given maker/slot.
 - `isRfqIdUsed(address maker, uint64 rfqId)` - Convenience helper to check whether an RFQ ID is consumed.
-- `fillOrderRFQ(...)` - Fills to `msg.sender` using a standard signature.
-- `fillOrderRFQCompact(...)` - Accepts a compact signature `(r, vs)` and optimizes calldata for EOAs.
-- `fillOrderRFQTo(...)` - Same as `fillOrderRFQ` but forwards maker funds to `target`.
-- `fillOrderRFQToWithPermit(...)` - Executes an ERC20 permit for the taker asset before calling `_fillOrderRFQTo`.
+- `isNonceUsed(uint256 nonce)` - Returns whether a caller-authorization nonce has been consumed.
+- `fillOrderRFQTo(OrderRFQ order, bytes signature, uint256 flagsAndAmount, address target, address[] allowedCallers, uint256 nonce, bytes authSig)` - Verifies caller authorization and the maker signature, then settles to `target`.
 - `cancelOrderRFQ(uint64 rfqId)` - Allows makers to invalidate quotes on-chain.
 
-All fill variants are `nonReentrant`, validate signature length hints, and revert with descriptive errors from `libraries/Errors.sol` when preconditions fail.
+`fillOrderRFQTo` is `nonReentrant`, validates signature length hints, and reverts with descriptive errors from `libraries/Errors.sol` when preconditions fail.
 
 ### 4.5 Fill Lifecycle & Guardrails
+
+Before the lifecycle below, `fillOrderRFQTo` verifies caller authorization over `keccak256(abi.encode(order))` and then verifies the maker's EIP-712 signature.
 
 1. **Target check** - Zero addresses are rejected via `RFQ_ZeroTargetIsForbidden`.
 2. **Expiry** - `block.timestamp` must be <= `order.expiry`.
@@ -160,9 +162,9 @@ Witness workflow:
 - `permit2Witness` must equal the keccak256 hash of the witness data (see `script/signOrderRFQ.js::calculateWitness`).
 - `permit2WitnessType` must include the entire custom type string concatenated with the Permit2 base types, exactly as required by Permit2's typed data format.
 
-### 4.7 Taker ERC20 Permits
+### 4.7 Caller Authorization
 
-`fillOrderRFQToWithPermit` accepts an arbitrary `permit` blob before calling `fillOrderRFQTo`. `SafeERC20.safePermit` auto-detects EIP-2612 (7-word payload) vs Dai-style (8-word payload) permits, enabling gas-efficient taker approvals.
+Caller authorization signs `keccak256(abi.encode(address(this), keccak256(abi.encode(order)), allowedCallers, nonce, block.chainid))` using EIP-191 and a 64-byte EIP-2098 compact signature. Nonces are tracked independently by each verifying contract.
 
 ### 4.8 Order Cancellation & Invalidators
 
@@ -249,6 +251,7 @@ const order = {
   makerAmount: 22_723_800n,
   takerAmount: 6_000_000_000_000_000n,
   usePermit2: true,
+  allowedSender: takerAddress,
   confidenceT: BigInt(Math.floor(Date.now() / 1000) + 30),  // slippage starts 30s from now
   confidenceWeight: 1000n,                                    // 0.1% per second
   confidenceCap: 50000n,                                      // max 5% reduction

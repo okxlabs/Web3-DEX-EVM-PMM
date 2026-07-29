@@ -9,15 +9,14 @@ import {DEX_ROUTER_CALLER_MARKER, MARKER_MASK, ORIGIN_PAYER, _ADDRESS_MASK} from
                             TEST HARNESS
 //////////////////////////////////////////////////////////////*/
 
-/// @dev Minimal concrete subclass exposing the internal CallerAuth surface so the
-///      OKX-signed caller-binding (FR-3) and the -64 dexRouterCaller marker extraction
-///      (FR-5 mechanism) are testable in isolation, without the full settlement flow.
+/// @dev Minimal concrete subclass exposing the internal CallerAuth surface so caller binding and the
+///      -64 dexRouterCaller marker extraction are testable in isolation, without settlement flow.
 contract CallerAuthHarness is CallerAuth {
-    constructor(address okxSigner) CallerAuth(okxSigner) {}
+    constructor(address authSigner) CallerAuth(authSigner) {}
 
     /// External wrapper for `_verifyCallerAuth` — reverts propagate to the caller.
-    function verify(address[] memory allowedCallers, uint256 nonce, uint256 expiry, bytes memory okxSig) external {
-        _verifyCallerAuth(allowedCallers, nonce, expiry, okxSig);
+    function verify(bytes32 payloadHash, address[] memory allowedCallers, uint256 nonce, bytes memory authSig) external {
+        _verifyCallerAuth(payloadHash, allowedCallers, nonce, authSig);
     }
 
     /// External wrapper for the pure `_extractDexRouterCaller`; reads the -64 calldata
@@ -31,26 +30,24 @@ contract CallerAuthHarness is CallerAuth {
                                 TESTS
 //////////////////////////////////////////////////////////////*/
 
-/// @notice Unit coverage for the CallerAuth base (SCDEX-1157 FR-3 caller binding + the
-///         `_extractDexRouterCaller` exact-marker read that FR-5 relies on). All signatures
-///         are produced with `vm.sign` (PRD §D: no hardcoded keys); the OKX signer key is
-///         derived with `makeAddrAndKey`.
+/// @notice Unit coverage for the CallerAuth base and the `_extractDexRouterCaller` exact-marker
+///         read. Signatures are produced with `vm.sign`; the authorization signer key is derived
+///         with `makeAddrAndKey`.
 contract CallerAuthTest is Test {
     CallerAuthHarness internal auth;
 
-    uint256 internal okxSignerKey;
-    address internal okxSigner;
+    uint256 internal authSignerKey;
+    address internal authSigner;
 
     address internal dexRouter = makeAddr("dexRouter");
     address internal dynamicRoute = makeAddr("dynamicRoute");
     address internal attacker = makeAddr("attacker");
     address internal dexUser = makeAddr("dexUser");
-
-    uint256 internal constant DEFAULT_EXPIRY_OFFSET = 1 hours;
+    bytes32 internal constant PAYLOAD_HASH = bytes32(uint256(0x1234));
 
     function setUp() public {
-        (okxSigner, okxSignerKey) = makeAddrAndKey("okxSigner");
-        auth = new CallerAuthHarness(okxSigner);
+        (authSigner, authSignerKey) = makeAddrAndKey("authSigner");
+        auth = new CallerAuthHarness(authSigner);
         vm.warp(1_000_000); // deterministic non-zero base timestamp
     }
 
@@ -62,12 +59,12 @@ contract CallerAuthTest is Test {
     /// EIP-191 with `key`, returning an EIP-2098 compact 64-byte signature.
     function _signAuth(
         address verifyingContract,
+        bytes32 payloadHash,
         address[] memory allowedCallers,
         uint256 nonce,
-        uint256 expiry,
         uint256 key
     ) internal view returns (bytes memory) {
-        bytes32 inner = keccak256(abi.encode(verifyingContract, allowedCallers, nonce, expiry, block.chainid));
+        bytes32 inner = keccak256(abi.encode(verifyingContract, payloadHash, allowedCallers, nonce, block.chainid));
         bytes32 ethSignedHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", inner));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, ethSignedHash);
         bytes32 vs = s | bytes32(uint256(v - 27) << 255);
@@ -102,124 +99,104 @@ contract CallerAuthTest is Test {
     }
 
     /*//////////////////////////////////////////////////////////////
-                    FR-3 / A0 — CONSTRUCTOR FAIL-CLOSED
+                    CONSTRUCTOR FAIL-CLOSED
     //////////////////////////////////////////////////////////////*/
 
-    // A-02 §A0 / FR-3-AC-7: a zero OKX signer is rejected at construction (fail-closed deploy),
-    // so the "zero signer" condition is enforced at deploy time rather than at verify time.
+    // A zero authorization signer is rejected at construction, so the fail-closed condition is
+    // enforced at deploy time rather than at verify time.
     function testConstructorRejectsZeroSigner() public {
-        vm.expectRevert(CallerAuth.OSA_ZeroSigner.selector);
+        vm.expectRevert(CallerAuth.AUTH_ZeroSigner.selector);
         new CallerAuthHarness(address(0));
     }
 
     function testConstructorStoresSigner() public view {
-        assertEq(auth.OKX_SIGNER(), okxSigner);
+        assertEq(auth.AUTH_SIGNER(), authSigner);
     }
 
     /*//////////////////////////////////////////////////////////////
-                    FR-3 — CALLER BINDING (happy path)
+                    CALLER BINDING (happy path)
     //////////////////////////////////////////////////////////////*/
 
-    // FR-3: an OKX-signed authorization whose msg.sender is in allowedCallers passes and
-    // consumes the nonce.
+    // A signed authorization whose msg.sender is in allowedCallers passes and consumes the nonce.
     function testVerifyValidAuthConsumesNonce() public {
         address[] memory callers = _pair(dexRouter, dynamicRoute);
         uint256 nonce = 1;
-        uint256 expiry = block.timestamp + DEFAULT_EXPIRY_OFFSET;
-        bytes memory sig = _signAuth(address(auth), callers, nonce, expiry, okxSignerKey);
+        bytes memory sig = _signAuth(address(auth), PAYLOAD_HASH, callers, nonce, authSignerKey);
 
         assertFalse(auth.isNonceUsed(nonce));
         vm.prank(dexRouter);
-        auth.verify(callers, nonce, expiry, sig);
+        auth.verify(PAYLOAD_HASH, callers, nonce, sig);
         assertTrue(auth.isNonceUsed(nonce));
     }
 
-    // FR-3: membership is by exact address; the SECOND entry in the set is also accepted
-    // (covers the DynamicRoute route as well as the direct DexRouter route).
+    // Membership is by exact address; the second entry in the set is also accepted.
     function testVerifyAcceptsSecondAllowedCaller() public {
         address[] memory callers = _pair(dexRouter, dynamicRoute);
-        uint256 expiry = block.timestamp + DEFAULT_EXPIRY_OFFSET;
-        bytes memory sig = _signAuth(address(auth), callers, 2, expiry, okxSignerKey);
+        bytes memory sig = _signAuth(address(auth), PAYLOAD_HASH, callers, 2, authSignerKey);
 
         vm.prank(dynamicRoute);
-        auth.verify(callers, 2, expiry, sig);
+        auth.verify(PAYLOAD_HASH, callers, 2, sig);
         assertTrue(auth.isNonceUsed(2));
     }
 
     /*//////////////////////////////////////////////////////////////
-                    FR-3 — CALLER BINDING (revert paths)
+                    CALLER BINDING (revert paths)
     //////////////////////////////////////////////////////////////*/
 
-    // FR-3: msg.sender not in the signed allowedCallers set → OSA_UntrustedCaller.
+    // msg.sender not in the signed allowedCallers set -> AUTH_UntrustedCaller.
     function testVerifyRejectsUntrustedCaller() public {
         address[] memory callers = _single(dexRouter);
-        uint256 expiry = block.timestamp + DEFAULT_EXPIRY_OFFSET;
-        bytes memory sig = _signAuth(address(auth), callers, 3, expiry, okxSignerKey);
+        bytes memory sig = _signAuth(address(auth), PAYLOAD_HASH, callers, 3, authSignerKey);
 
         vm.prank(attacker);
-        vm.expectRevert(CallerAuth.OSA_UntrustedCaller.selector);
-        auth.verify(callers, 3, expiry, sig);
+        vm.expectRevert(CallerAuth.AUTH_UntrustedCaller.selector);
+        auth.verify(PAYLOAD_HASH, callers, 3, sig);
     }
 
-    // FR-3 anti-replay: reusing a consumed nonce → OSA_NonceUsed.
+    // Reusing a consumed nonce -> AUTH_NonceUsed.
     function testVerifyRejectsReusedNonce() public {
         address[] memory callers = _single(dexRouter);
-        uint256 expiry = block.timestamp + DEFAULT_EXPIRY_OFFSET;
-        bytes memory sig = _signAuth(address(auth), callers, 4, expiry, okxSignerKey);
+        bytes memory sig = _signAuth(address(auth), PAYLOAD_HASH, callers, 4, authSignerKey);
 
         vm.prank(dexRouter);
-        auth.verify(callers, 4, expiry, sig);
+        auth.verify(PAYLOAD_HASH, callers, 4, sig);
 
-        // Re-sign the identical preimage (same nonce) — signature is valid, but the nonce
+        // Re-sign the identical preimage (same nonce): signature is valid, but the nonce
         // bitmap already has the bit set.
         vm.prank(dexRouter);
-        vm.expectRevert(CallerAuth.OSA_NonceUsed.selector);
-        auth.verify(callers, 4, expiry, sig);
+        vm.expectRevert(CallerAuth.AUTH_NonceUsed.selector);
+        auth.verify(PAYLOAD_HASH, callers, 4, sig);
     }
 
-    // FR-3: expired authorization → OSA_Expired.
-    function testVerifyRejectsExpired() public {
-        address[] memory callers = _single(dexRouter);
-        uint256 expiry = block.timestamp - 1; // already elapsed
-        bytes memory sig = _signAuth(address(auth), callers, 5, expiry, okxSignerKey);
-
-        vm.prank(dexRouter);
-        vm.expectRevert(CallerAuth.OSA_Expired.selector);
-        auth.verify(callers, 5, expiry, sig);
-    }
-
-    // FR-3: signature length other than the EIP-2098 compact 64 bytes → OSA_BadSigLen.
+    // Signature length other than the EIP-2098 compact 64 bytes -> AUTH_BadSigLen.
     function testVerifyRejectsBadSigLen() public {
         address[] memory callers = _single(dexRouter);
-        uint256 expiry = block.timestamp + DEFAULT_EXPIRY_OFFSET;
-        // 65-byte (r,s,v) legacy signature is not accepted — base is compact-only.
+        // 65-byte (r,s,v) legacy signature is not accepted; base is compact-only.
         bytes memory sig65 = abi.encodePacked(bytes32(uint256(1)), bytes32(uint256(2)), uint8(27));
         assertEq(sig65.length, 65);
 
         vm.prank(dexRouter);
-        vm.expectRevert(CallerAuth.OSA_BadSigLen.selector);
-        auth.verify(callers, 6, expiry, sig65);
+        vm.expectRevert(CallerAuth.AUTH_BadSigLen.selector);
+        auth.verify(PAYLOAD_HASH, callers, 6, sig65);
     }
 
-    // FR-3: valid-length signature but signed by a key other than OKX_SIGNER → recovered
-    // signer != OKX_SIGNER → OSA_BadOkxSig.
+    // Valid-length signature but signed by a key other than the authorization signer ->
+    // AUTH_BadAuthSig.
     function testVerifyRejectsWrongSigner() public {
-        (, uint256 wrongKey) = makeAddrAndKey("notOkxSigner");
+        (, uint256 wrongKey) = makeAddrAndKey("notAuthSigner");
         address[] memory callers = _single(dexRouter);
-        uint256 expiry = block.timestamp + DEFAULT_EXPIRY_OFFSET;
-        bytes memory sig = _signAuth(address(auth), callers, 7, expiry, wrongKey);
+        bytes memory sig = _signAuth(address(auth), PAYLOAD_HASH, callers, 7, wrongKey);
 
         vm.prank(dexRouter);
-        vm.expectRevert(CallerAuth.OSA_BadOkxSig.selector);
-        auth.verify(callers, 7, expiry, sig);
+        vm.expectRevert(CallerAuth.AUTH_BadAuthSig.selector);
+        auth.verify(PAYLOAD_HASH, callers, 7, sig);
     }
 
-    // FR-3: a malformed signature whose `s` is in the upper half order makes ECDSA.recover
-    // fail closed to address(0) → OSA_BadOkxSig (the `signer == address(0)` branch).
+    // A malformed signature whose `s` is in the upper half order makes ECDSA.recover fail closed
+    // to address(0) -> AUTH_BadAuthSig.
     function testVerifyRejectsMalformedSignatureRecoverZero() public {
         address[] memory callers = _single(dexRouter);
-        uint256 expiry = block.timestamp + DEFAULT_EXPIRY_OFFSET;
-        // vs with all low-255 bits set → s == _COMPACT_S_MASK, far above the s-boundary,
+        // vs with all low-255 bits set -> s == _COMPACT_S_MASK, far above the s-boundary,
         // so recover() takes the `signer stays 0` path.
         bytes32 r = bytes32(uint256(1));
         bytes32 vs = bytes32(uint256((1 << 255) - 1));
@@ -227,48 +204,55 @@ contract CallerAuthTest is Test {
         assertEq(sig.length, 64);
 
         vm.prank(dexRouter);
-        vm.expectRevert(CallerAuth.OSA_BadOkxSig.selector);
-        auth.verify(callers, 8, expiry, sig);
+        vm.expectRevert(CallerAuth.AUTH_BadAuthSig.selector);
+        auth.verify(PAYLOAD_HASH, callers, 8, sig);
     }
 
-    // FR-3: a signature bound to a DIFFERENT verifyingContract does not verify against this
-    // instance (cross-contract replay protection — digest binds address(this)).
+    // A signature bound to a different verifyingContract does not verify against this instance.
     function testVerifyRejectsCrossContractReplay() public {
         address[] memory callers = _single(dexRouter);
-        uint256 expiry = block.timestamp + DEFAULT_EXPIRY_OFFSET;
         // Sign for some OTHER contract address, then present to `auth`.
-        bytes memory sig = _signAuth(address(0xDEAD), callers, 9, expiry, okxSignerKey);
+        bytes memory sig = _signAuth(address(0xDEAD), PAYLOAD_HASH, callers, 9, authSignerKey);
 
         vm.prank(dexRouter);
-        vm.expectRevert(CallerAuth.OSA_BadOkxSig.selector);
-        auth.verify(callers, 9, expiry, sig);
+        vm.expectRevert(CallerAuth.AUTH_BadAuthSig.selector);
+        auth.verify(PAYLOAD_HASH, callers, 9, sig);
+    }
+
+    function testVerifyRejectsPayloadReplay() public {
+        address[] memory callers = _single(dexRouter);
+        bytes memory sig = _signAuth(address(auth), PAYLOAD_HASH, callers, 10, authSignerKey);
+
+        vm.prank(dexRouter);
+        vm.expectRevert(CallerAuth.AUTH_BadAuthSig.selector);
+        auth.verify(bytes32(uint256(0x5678)), callers, 10, sig);
     }
 
     /*//////////////////////////////////////////////////////////////
-        FR-5 mechanism — _extractDexRouterCaller EXACT marker match
+        _extractDexRouterCaller EXACT marker match
     //////////////////////////////////////////////////////////////*/
 
-    // A valid DexRouter marker word at -64 → returns the embedded address.
+    // A valid DexRouter marker word at -64 returns the embedded address.
     function testExtractValidMarkerReturnsAddress() public {
         address got = _extractWith(_markCaller(dexUser));
         assertEq(got, dexUser);
     }
 
-    // Missing marker (plain address word, no marker bits) → fail-closed to address(0).
+    // Missing marker (plain address word, no marker bits) fails closed to address(0).
     function testExtractMissingMarkerReturnsZero() public {
         uint256 word = uint256(uint160(dexUser)); // no marker in high bytes
         assertEq(_extractWith(word), address(0));
     }
 
-    // Forged marker: high 48 bits all set (an attacker maximising the masked bits) does NOT
-    // equal DEX_ROUTER_CALLER_MARKER under the exact-match test → fail-closed to address(0).
+    // Forged marker: high 48 bits all set does not equal DEX_ROUTER_CALLER_MARKER under the
+    // exact-match test, so extraction fails closed to address(0).
     function testExtractForgedFullBitsMarkerReturnsZero() public {
         uint256 word = MARKER_MASK | uint256(uint160(attacker));
         assertEq(_extractWith(word), address(0));
     }
 
     // The ORIGIN_PAYER marker (`...ccc...`, used for the -32 refund word) must NOT be accepted
-    // as a dexRouterCaller marker (`...ddd...`) — proves the two trailing words never collide.
+    // as a dexRouterCaller marker (`...ddd...`), proving the two trailing words never collide.
     function testExtractOriginPayerMarkerReturnsZero() public {
         uint256 word = ORIGIN_PAYER | uint256(uint160(dexUser));
         assertEq(_extractWith(word), address(0));

@@ -38,7 +38,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
         makerToken = new MockERC20("MakerToken", "MAKER", 18);
         takerToken = new MockERC20("TakerToken", "TAKER", 18);
         weth = new MockWETH();
-        pmmProtocol = new PMMProtocol(IWETH(address(weth)), OKX_SIGNER_ADDRESS);
+        pmmProtocol = new PMMProtocol(IWETH(address(weth)), AUTH_SIGNER_ADDRESS);
 
         maker = MAKER_ADDRESS;
         taker = TAKER_ADDRESS;
