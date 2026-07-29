@@ -39,7 +39,7 @@ contract PmmProtocolTest is TestHelper {
         makerToken = new MockERC20("MakerToken", "MAKER", 18);
         takerToken = new MockERC20("TakerToken", "TAKER", 18);
         weth = new MockWETH();
-        pmmProtocol = new PMMProtocol(IWETH(address(weth)));
+        pmmProtocol = new PMMProtocol(IWETH(address(weth)), OKX_SIGNER_ADDRESS);
 
         maker = MAKER_ADDRESS;
         taker = TAKER_ADDRESS;
@@ -67,7 +67,7 @@ contract PmmProtocolTest is TestHelper {
         bytes memory signature = _sign(order);
 
         vm.prank(taker);
-        (uint256 makerFilled, uint256 takerFilled,) = pmmProtocol.fillOrderRFQ(order, signature, 0);
+        (uint256 makerFilled, uint256 takerFilled,) = _fillAs(pmmProtocol, taker,order, signature, 0);
 
         assertEq(makerFilled, order.makerAmount);
         assertEq(takerFilled, order.takerAmount);
@@ -76,7 +76,7 @@ contract PmmProtocolTest is TestHelper {
         // second attempt should revert because rfqId already consumed
         vm.prank(taker);
         vm.expectRevert(abi.encodeWithSelector(Errors.RFQ_InvalidatedOrder.selector, order.rfqId));
-        pmmProtocol.fillOrderRFQ(order, signature, 0);
+        _fillAs(pmmProtocol, taker,order, signature, 0);
     }
 
     function testFillOrderPartialMakerAmountUsesCalculator() public {
@@ -87,7 +87,7 @@ contract PmmProtocolTest is TestHelper {
         uint256 flagsAndAmount = MAKER_AMOUNT_FLAG | desiredMaker;
 
         vm.prank(taker);
-        (uint256 makerFilled, uint256 takerFilled,) = pmmProtocol.fillOrderRFQ(order, signature, flagsAndAmount);
+        (uint256 makerFilled, uint256 takerFilled,) = _fillAs(pmmProtocol, taker,order, signature, flagsAndAmount);
 
         assertEq(makerFilled, desiredMaker);
         assertEq(takerFilled, TAKING_AMOUNT * 8 / 10);
@@ -102,7 +102,7 @@ contract PmmProtocolTest is TestHelper {
 
         vm.prank(taker);
         vm.expectRevert(abi.encodeWithSelector(Errors.RFQ_SettlementAmountTooSmall.selector, order.rfqId));
-        pmmProtocol.fillOrderRFQ(order, signature, flagsAndAmount);
+        _fillAs(pmmProtocol, taker,order, signature, flagsAndAmount);
     }
 
     function testFillOrderUnwrapsWethWhenFlagged() public {
@@ -126,7 +126,7 @@ contract PmmProtocolTest is TestHelper {
 
         uint256 takerBalanceBefore = taker.balance;
         vm.prank(taker);
-        pmmProtocol.fillOrderRFQ(order, signature, UNWRAP_WETH_FLAG);
+        _fillAs(pmmProtocol, taker,order, signature, UNWRAP_WETH_FLAG);
 
         assertEq(taker.balance, takerBalanceBefore + 1 ether);
     }
@@ -149,7 +149,7 @@ contract PmmProtocolTest is TestHelper {
 
         vm.prank(taker);
         vm.expectRevert(abi.encodeWithSelector(Errors.RFQ_OrderExpired.selector, order.rfqId));
-        pmmProtocol.fillOrderRFQ(order, signature, 0);
+        _fillAs(pmmProtocol, taker,order, signature, 0);
     }
 
     function testFillOrderRejectsBadSignature() public {
@@ -158,7 +158,7 @@ contract PmmProtocolTest is TestHelper {
 
         vm.prank(taker);
         vm.expectRevert(abi.encodeWithSelector(Errors.RFQ_BadSignature.selector, order.rfqId));
-        pmmProtocol.fillOrderRFQ(order, signature, 0);
+        _fillAs(pmmProtocol, taker,order, signature, 0);
     }
 
     function testFillOrderWithPermit2AllowancePath() public {
@@ -169,7 +169,7 @@ contract PmmProtocolTest is TestHelper {
         bytes memory signature = _sign(order);
 
         vm.prank(taker);
-        pmmProtocol.fillOrderRFQ(order, signature, 0);
+        _fillAs(pmmProtocol, taker,order, signature, 0);
 
         assertEq(makerToken.balanceOf(taker), order.makerAmount);
     }
@@ -189,7 +189,7 @@ contract PmmProtocolTest is TestHelper {
         uint256 flagsAndAmount = MAKER_AMOUNT_FLAG | desiredMaker;
 
         vm.prank(taker);
-        (uint256 makerFilled,,) = pmmProtocol.fillOrderRFQ(order, signature, flagsAndAmount);
+        (uint256 makerFilled,,) = _fillAs(pmmProtocol, taker,order, signature, flagsAndAmount);
 
         assertEq(makerFilled, desiredMaker);
         assertEq(makerToken.balanceOf(taker), desiredMaker);
@@ -204,7 +204,7 @@ contract PmmProtocolTest is TestHelper {
         bytes memory signature = _sign(order);
         vm.prank(taker);
         vm.expectRevert(abi.encodeWithSelector(Errors.RFQ_InvalidatedOrder.selector, order.rfqId));
-        pmmProtocol.fillOrderRFQ(order, signature, 0);
+        _fillAs(pmmProtocol, taker,order, signature, 0);
     }
 
     function _defaultOrder(bool usePermit2) internal view returns (OrderRFQLib.OrderRFQ memory) {

@@ -13,6 +13,8 @@ import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 /// @dev Exposes the internal `_call` overloads so the maker-balance recheck logic
 /// is observable at assertion level without driving the full sellBase/sellQuote path.
 contract PMMAdapterHarness is PMMAdapter {
+    constructor(address okxSigner) PMMAdapter(okxSigner) {}
+
     /// 4-arg path (V2/V3) — caller controls the MakerBalanceCheck directly.
     function exposedCall4(
         address target,
@@ -123,6 +125,10 @@ contract PmmAdaptorTest is Test {
     address internal maker = makeAddr("maker");
     address internal taker = makeAddr("taker");
 
+    // OKX signer for adapter construction. These tests exercise only the V1/V2/V3 legacy
+    // `_call` paths (no orderType=4 caller-auth), so any non-zero value suffices.
+    address internal constant OKX_SIGNER = address(0xBEEF);
+
     uint256 internal constant RFQ_ID = 7;
     uint256 internal constant MAKER_AMOUNT = 100 ether;
     uint256 internal constant TAKER_AMOUNT = 200 ether;
@@ -136,8 +142,8 @@ contract PmmAdaptorTest is Test {
     bytes4 internal constant SEL_UNKNOWN = 0xdeadbeef; // not mapped → fallback branch
 
     function setUp() public {
-        harness = new PMMAdapterHarness();
-        adapter = new PMMAdapter();
+        harness = new PMMAdapterHarness(OKX_SIGNER);
+        adapter = new PMMAdapter(OKX_SIGNER);
         pool = new MockRevertingPool();
         makerToken = new MockBalanceToken();
         takerToken = new MockERC20("TakerToken", "TAKER", 18);

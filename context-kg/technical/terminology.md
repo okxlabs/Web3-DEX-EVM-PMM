@@ -1,6 +1,11 @@
 ---
 name: "terminology"
-description: "Canonical term definitions — roles, OrderRFQ parameters, flag bits, errors, and storage slots for OKX Labs PMM Protocol"
+description: "Canonical term definitions — roles, OrderRFQ parameters (15 fields incl. allowedSender), caller-auth terms, flag bits, errors (incl. OSA_*/RFQ_BadSender), and storage slots for OKX Labs PMM Protocol"
+type: "design"
+title: "Terminology"
+tags: ["terminology", "OrderRFQ", "allowedSender", "CallerAuth", "OSA-errors", "RFQ_BadSender", "storage-slots", "SCDEX-1157"]
+sources: ["src/OrderRFQLib.sol", "src/PmmProtocol.sol", "src/PmmAdaptor.sol", "src/libraries/CallerAuth.sol", "src/libraries/Constants.sol", "src/libraries/Errors.sol"]
+last_updated: "2026-07-05"
 ---
 
 # Terminology
@@ -10,13 +15,16 @@ description: "Canonical term definitions — roles, OrderRFQ parameters, flag bi
 | Term | Description | Defined In |
 |------|-------------|------------|
 | Maker | Off-chain PMM that signs `OrderRFQ` structs; owns the maker-asset funds. Identified by `order.makerAddress`. | `PmmProtocol.sol` (order field) |
-| Taker | Caller of `fillOrderRFQ*` — pays the taker asset and receives the maker asset. Identified by `msg.sender`. | `PmmProtocol.sol::_fillOrderRFQTo` |
+| Taker | Beneficiary of a fill — receives the maker asset; the taker asset is supplied by the calling adapter. | `PmmProtocol.sol::_fillOrderRFQTo` |
 | Target | Recipient of the maker leg, used when the taker wants to forward funds (e.g., aggregator). Passed as `target` to `fillOrderRFQTo`. | `PmmProtocol.sol::fillOrderRFQTo` |
-| Aggregator | Calls `PMMAdapter.sellBase` / `sellQuote` from a swap router; the adapter then calls `PMMProtocol.fillOrderRFQTo`. | `PmmAdaptor.sol::sellBase`, `sellQuote` |
+| Aggregator / Router | Calls `PMMAdapter.sellBase` / `sellQuote` from a swap router; the adapter then calls `PMMProtocol.fillOrderRFQTo`. | `PmmAdaptor.sol::sellBase`, `sellQuote` |
+| `OKX_SIGNER` | Immutable OKX-backend authorization signer (`CallerAuth`); off-chain signs the caller-auth tuple. Set in both `PMMProtocol` and `PMMAdapter` constructors. | `CallerAuth.sol` |
+| dexRouterCaller | The outermost address directly calling DexRouter, injected into calldata `-64` and read by `_extractDexRouterCaller`. Compared against `order.allowedSender` in orderType=4. | `Constants.sol`, `CallerAuth.sol::_extractDexRouterCaller` |
+| allowedCallers | OKX-signed set of on-chain relayers permitted to call a caller-bound function: `[PmmAdapter]` for `PMMProtocol`; `[DexRouter, DynamicRoute]` for `PMMAdapter`. | `CallerAuth.sol::_verifyCallerAuth` |
 
 ## OrderRFQ Fields
 
-`OrderRFQLib.OrderRFQ` (14 fields — V3 format):
+`OrderRFQLib.OrderRFQ` (**15 fields** — V4 / anti-toxic-flow format; `allowedSender` added in SCDEX-1157):
 
 | Term | Solidity Type | Description | Used In |
 |------|---------------|-------------|---------|
@@ -28,6 +36,7 @@ description: "Canonical term definitions — roles, OrderRFQ parameters, flag bi
 | `makerAmount` | `uint256` | Quoted maker size (capped to `uint160.max` when `usePermit2 = true` for a full fill). | `_fillOrderRFQTo` |
 | `takerAmount` | `uint256` | Quoted taker size. | `_fillOrderRFQTo`, `AmountCalculator` |
 | `usePermit2` | `bool` | When `true`, maker leg uses Uniswap Permit2 transfer; otherwise standard `safeTransferFrom`. | `_fillOrderRFQTo` |
+| `allowedSender` | `address` | **NEW (SCDEX-1157).** Required non-zero address the maker quoted for. Bound into the EIP-712 digest; checked in PMMAdapter orderType=4 as `allowedSender == dexRouterCaller` (else `RFQ_BadSender`). Not checked inside PMMProtocol. | `PMMAdapter._executeV4Order`, `OrderRFQLib.hash` |
 | `confidenceT` | `uint256` | Unix timestamp after which time-slippage activates (`0` disables). | `_fillOrderRFQTo` confidence block |
 | `confidenceWeight` | `uint256` | Reduction rate per second in 1e6 units (e.g., `1000` = 0.1%/s). | `_fillOrderRFQTo` confidence block |
 | `confidenceCap` | `uint256` | Max cumulative reduction in 1e6 units; hard cap `_CONFIDENCE_CAP_LIMIT = 50000` (5%). | `_fillOrderRFQTo` confidence block |
@@ -59,7 +68,7 @@ description: "Canonical term definitions — roles, OrderRFQ parameters, flag bi
 
 | Term | Kind | Description |
 |------|------|-------------|
-| `OrderFilledRFQ` | Event | Emitted in `fillOrderRFQTo` and `fillOrderRFQCompact` after the order is settled. Includes both quoted and filled amounts and full Permit2 metadata. |
+| `OrderFilledRFQ` | Event | Emitted in `fillOrderRFQTo` (the single fill entry) after the order is settled. Includes both quoted and filled amounts and full Permit2 metadata. Shape unchanged by SCDEX-1157. |
 | `OrderCancelledRFQ` | Event | Emitted in `cancelOrderRFQ` after the maker's bitmap is updated. |
 
 ## Custom Errors
@@ -82,17 +91,30 @@ description: "Canonical term definitions — roles, OrderRFQ parameters, flag bi
 | `RFQ_SettlementAmountTooSmall` | Maker or taker fill < 60% of the quoted amount (before confidence reduction). |
 | `RFQ_OrderAlreadyCancelledOrUsed` | `cancelOrderRFQ` called for an rfqId already consumed. |
 | `RFQ_ConfidenceCapExceeded` | `order.confidenceCap > _CONFIDENCE_CAP_LIMIT` (50000). |
+| `RFQ_BadSender` | **NEW (SCDEX-1157).** `order.allowedSender` is zero (unset) or `!= dexRouterCaller`. Reverted in **`PMMAdapter._executeV4Order`** (orderType=4) — NOT in PMMProtocol. |
+
+`CallerAuth` errors (all parameterless — SCDEX-1157), thrown by `_verifyCallerAuth` in both `PMMProtocol` and `PMMAdapter`:
+
+| Term | Thrown When |
+|------|------------|
+| `OSA_ZeroSigner` | `okxSigner == address(0)` at construction (fail-closed deploy). |
+| `OSA_BadSigLen` | `okxSig.length != 64` (EIP-2098 compact required). |
+| `OSA_BadOkxSig` | Recovered signer is zero or `!= OKX_SIGNER`. |
+| `OSA_Expired` | `block.timestamp > expiry` (caller-auth expiry). |
+| `OSA_UntrustedCaller` | `msg.sender ∉ allowedCallers`. |
+| `OSA_NonceUsed` | The caller-auth `nonce` was already consumed. |
 
 Additional errors from `SafeERC20.sol` may surface through fill flows: `SafeTransferFailed`, `SafeTransferFromFailed`, `ForceApproveFailed`, `SafeIncreaseAllowanceFailed`, `SafeDecreaseAllowanceFailed`, `SafePermitBadLength`, `Permit2TransferAmountTooHigh`.
 
 ## Storage Slots
 
-`PMMProtocol` (from `forge inspect`):
+`PMMProtocol` (from `forge inspect PMMProtocol storageLayout` — slots **shifted** by SCDEX-1157: `CallerAuth` is inherited before `ReentrancyGuard`):
 
 | Variable | Type | Slot | Description |
 |----------|------|------|-------------|
-| `_status` | `uint256` | 0 | Inherited from OpenZeppelin `ReentrancyGuard`. |
-| `_invalidator` | `mapping(address => mapping(uint256 => uint256))` | 1 | Outer key: maker. Inner key: `rfqId >> 8`. Value: 256-bit bitmap of used rfqIds (bit position = `uint8(rfqId)`). |
+| `_callerAuthNonceBitmap` | `mapping(uint256 => uint256)` | 0 | Inherited from `CallerAuth`. Single-use OKX caller-auth nonce bitmap (word = `nonce >> 8`, bit = `nonce & 0xff`). |
+| `_status` | `uint256` | 1 | Inherited from OpenZeppelin `ReentrancyGuard`. (was slot 0) |
+| `_invalidator` | `mapping(address => mapping(uint256 => uint256))` | 2 | Outer key: maker. Inner key: `rfqId >> 8`. Value: 256-bit bitmap of used rfqIds (bit position = `uint8(rfqId)`). (was slot 1) |
 
 `EIP712` (inherited by `PMMProtocol`):
 
@@ -102,13 +124,22 @@ Additional errors from `SafeERC20.sol` may surface through fill flows: `SafeTran
 | `_CACHED_CHAIN_ID` | `uint256` | immutable | `block.chainid` at construction; trigger to rebuild domain. |
 | `_CACHED_THIS` | `address` | immutable | `address(this)` at construction; trigger to rebuild domain. |
 | `_HASHED_NAME` | `bytes32` | immutable | `keccak256("OKX Labs PMM Protocol")`. |
-| `_HASHED_VERSION` | `bytes32` | immutable | `keccak256("1.1")`. |
+| `_HASHED_VERSION` | `bytes32` | immutable | `keccak256("1.2")` (was `keccak256("1.1")`). |
 | `_TYPE_HASH` | `bytes32` | immutable | `keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)")`. |
 
 `PMMProtocol` immutables (not in storage layout):
 
 | Variable | Type | Description |
 |----------|------|-------------|
+| `OKX_SIGNER` | `address` | Inherited from `CallerAuth`. OKX caller-auth signer; zero rejected at deploy. |
 | `_WETH` | `IWETH` | WETH9 address for the deployed chain; used for wrap/unwrap. |
 
-`PMMAdapter`: no state variables. Only `internal constant ORIGIN_PAYER` and `constant ADDRESS_MASK`.
+`PMMAdapter` (from `forge inspect PMMAdapter storageLayout` — no longer stateless):
+
+| Variable | Type | Slot | Description |
+|----------|------|------|-------------|
+| `_callerAuthNonceBitmap` | `mapping(uint256 => uint256)` | 0 | Inherited from `CallerAuth`. |
+| `_status` | `uint256` | 1 | Inherited from `ReentrancyGuard`. |
+| `OKX_SIGNER` | `address` (immutable) | — | Inherited from `CallerAuth`. |
+
+Marker constants (`src/libraries/Constants.sol`, file-level): `DEX_ROUTER_CALLER_MARKER` (`0x3ca20afc2ddd…`), `MARKER_MASK` (`0xffffffffffff…`), `ORIGIN_PAYER` (`0x3ca20afc2ccc…`), `_ADDRESS_MASK` (low-20-bytes). calldata layout: `dexRouterCaller@-64, refundTo@-32`.

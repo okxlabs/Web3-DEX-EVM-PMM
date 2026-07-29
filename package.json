@@ -2,7 +2,10 @@
     "name": "web3-trade-pmm",
     "type": "module",
     "description": "OKX PMM Protocol",
-    "scripts": {},
+    "scripts": {
+        "build": "bash -c 'FOUNDRY_SOLC=$HOME/.svm/0.8.17/solc-0.8.17 $HOME/.foundry/bin/forge build --offline'",
+        "test": "bash -c 'FOUNDRY_SOLC=$HOME/.svm/0.8.17/solc-0.8.17 $HOME/.foundry/bin/forge test --offline --no-match-path \"test/*Fork*\"'"
+    },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/OKX-Web3/Web3-Trade-PMM.git"

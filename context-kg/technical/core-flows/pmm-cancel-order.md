@@ -7,7 +7,7 @@ description: "Maker invalidates one of their own RFQ IDs on-chain so it can no l
 
 ## Overview
 
-A maker preemptively invalidates a previously-signed RFQ ID before any taker has consumed it. The on-chain effect is a single bit-flip in the maker's invalidator bitmap; once set, any subsequent `fillOrderRFQ*` for the same `(maker, rfqId)` reverts with `RFQ_InvalidatedOrder`.
+A maker preemptively invalidates a previously-signed RFQ ID before any taker has consumed it. The on-chain effect is a single bit-flip in the maker's invalidator bitmap; once set, any subsequent `fillOrderRFQTo` for the same `(maker, rfqId)` reverts with `RFQ_InvalidatedOrder`.
 
 ## Participants
 
@@ -50,4 +50,4 @@ A maker preemptively invalidates a previously-signed RFQ ID before any taker has
 - [Rule] `isRfqIdUsed(maker, rfqId) == true` post-cancel.
 - [Rule] No funds move; no allowance is touched; only `_invalidator[maker][rfqId >> 8]` is updated.
 - [Rule] The cancellation is **per-maker**: cancelling rfqId `7` for maker A does not affect rfqId `7` for maker B.
-- [Rule] After cancellation, every `fillOrderRFQ*` for the same `(maker, rfqId)` reverts at step 4.3 of [[pmm-fill-order]] (`RFQ_InvalidatedOrder`).
+- [Rule] After cancellation, every `fillOrderRFQTo` for the same `(maker, rfqId)` reverts at step 4.3 of [[pmm-fill-order]] (`RFQ_InvalidatedOrder`).

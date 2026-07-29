@@ -107,8 +107,12 @@ contract PmmProtocolPermitWitnessFork is TestHelper {
         emit log_named_bytes("orderSignature", orderSignature);
 
         // Execute
+        (address[] memory allowedCallers, uint256 authNonce, uint256 authExpiry, bytes memory okxSig) =
+            _callerAuth(TAKER_ADDRESS1, address(pool));
         vm.startPrank(TAKER_ADDRESS1);
-        pool.fillOrderRFQTo(order, orderSignature, order.takerAmount, TAKER_ADDRESS1);
+        pool.fillOrderRFQTo(
+            order, orderSignature, order.takerAmount, TAKER_ADDRESS1, allowedCallers, authNonce, authExpiry, okxSig
+        );
 
         // Verify Balances
         // assertEq(IERC20(usdt).balanceOf(MAKER_ADDRESS), 90);
@@ -201,7 +205,11 @@ contract PmmProtocolPermitWitnessFork is TestHelper {
         bytes memory orderSignature = signOrder(order, pool.DOMAIN_SEPARATOR(), PK);
         emit log_named_bytes("orderSignature", orderSignature);
 
+        (address[] memory allowedCallers, uint256 authNonce, uint256 authExpiry, bytes memory okxSig) =
+            _callerAuth(deployer, address(pool));
         vm.startBroadcast(deployer);
-        pool.fillOrderRFQTo(order, orderSignature, order.takerAmount, TAKER_ADDRESS1);
+        pool.fillOrderRFQTo(
+            order, orderSignature, order.takerAmount, TAKER_ADDRESS1, allowedCallers, authNonce, authExpiry, okxSig
+        );
     }
 }
