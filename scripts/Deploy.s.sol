@@ -34,11 +34,18 @@ contract Deploy is Script {
         console.log("Chain ID:", block.chainid);
         console.log("Wrapped native used:", weth);
 
+        // OKX backend signer used for the anti-toxic-flow caller binding (SCDEX-1157).
+        // Provided at deploy time via the OKX_SIGNER env var.
+        address okxSigner = vm.envAddress("OKX_SIGNER");
+        require(okxSigner != address(0), "Deploy: OKX_SIGNER unset");
+
         vm.startBroadcast(deployer);
 
-        PMMProtocol protocol = new PMMProtocol(IWETH(weth));
+        PMMProtocol protocol = new PMMProtocol(IWETH(weth), okxSigner);
 
-        bytes memory adapterBytecode = vm.getCode("PmmAdaptor.sol:PMMAdapter");
+        // Append the constructor arg (okxSigner) to the adapter creation bytecode.
+        bytes memory adapterBytecode =
+            abi.encodePacked(vm.getCode("PmmAdaptor.sol:PMMAdapter"), abi.encode(okxSigner));
         address adapter;
         assembly {
             adapter := create(0, add(adapterBytecode, 0x20), mload(adapterBytecode))

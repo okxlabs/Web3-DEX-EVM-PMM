@@ -4,6 +4,20 @@ pragma solidity 0.8.17;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import {OrderRFQLib} from "./OrderRFQLib.sol";
+import {CallerAuth} from "./libraries/CallerAuth.sol";
+import {Errors} from "./libraries/Errors.sol";
+import {ORIGIN_PAYER, _ADDRESS_MASK} from "./libraries/Constants.sol";
+
+/// @notice Bundled OKX caller-auth parameters forwarded through the adapter for orderType=4.
+///         Mirrors the (allowedCallers, nonce, expiry, okxSig) tuple that CallerAuth verifies.
+struct OkxAuth {
+    address[] allowedCallers; // trusted caller set the OKX signature authorises
+    uint256 nonce; // single-use nonce (replay protection)
+    uint256 expiry; // unix timestamp after which the signature is invalid
+    bytes okxSig; // EIP-2098 compact 64-byte signature by OKX_SIGNER
+}
 
 interface IPMMProtocolV1 {
     struct OrderRFQ {
@@ -67,11 +81,25 @@ interface IPMMProtocolV3 {
     function DOMAIN_SEPARATOR() external view returns (bytes32);
 }
 
-contract PMMAdapter {
-    using Strings for uint256;
+/// @dev V4 (anti-toxic-flow, SCDEX-1157) unique settlement entry on PMMProtocol. The order
+///      carries the new required `allowedSender` field and the call is bound to the OKX-backend
+///      caller-auth params (allowedCallers/nonce/expiry/okxSig). Uses the canonical
+///      OrderRFQLib.OrderRFQ so the adapter's encoding stays in sync with the protocol.
+interface IPMMProtocolV4 {
+    function fillOrderRFQTo(
+        OrderRFQLib.OrderRFQ memory order,
+        bytes calldata signature,
+        uint256 flagsAndAmount,
+        address target,
+        address[] calldata allowedCallers,
+        uint256 nonce,
+        uint256 expiry,
+        bytes calldata okxSig
+    ) external returns (uint256, uint256, bytes32);
+}
 
-    uint256 internal constant ORIGIN_PAYER = 0x3ca20afc2ccc0000000000000000000000000000000000000000000000000000;
-    uint256 constant ADDRESS_MASK = 0x000000000000000000000000ffffffffffffffffffffffffffffffffffffffff;
+contract PMMAdapter is CallerAuth, ReentrancyGuard {
+    using Strings for uint256;
 
     // Protocol-level hard cap on confidence (time-slippage) cutdown, mirrors
     // PmmProtocol.sol `_CONFIDENCE_CAP_LIMIT` (5% in 1e6 units). Used only by the
@@ -96,7 +124,7 @@ contract PMMAdapter {
         uint256 confidenceCap; // order.confidenceCap    ┘
     }
 
-    constructor() {}
+    constructor(address okxSigner) CallerAuth(okxSigner) {}
 
     function _PMMSwap(address to, address pool, bytes memory moreInfo, uint256 payerOrigin) internal {
         (bytes memory orderInfo, bytes memory signature, uint256 signatureType, uint256 orderType) =
@@ -108,6 +136,8 @@ contract PMMAdapter {
             _executeV2Order(to, pool, orderInfo, signature, signatureType, payerOrigin);
         } else if (orderType == 3) {
             _executeV3Order(to, pool, orderInfo, signature, signatureType, payerOrigin);
+        } else if (orderType == 4) {
+            _executeV4Order(to, pool, orderInfo, signature, signatureType, payerOrigin);
         } else {
             revert("PMMAdapter: unsupported orderType");
         }
@@ -232,10 +262,73 @@ contract PMMAdapter {
         _handleRefund(order.takerAsset, payerOrigin);
     }
 
+    /// @dev orderType=4 (anti-toxic-flow, SCDEX-1157 FR-5/FR-3). New path only; V1/V2/V3 above
+    ///      are unchanged. `orderInfo = abi.encode(OrderRFQ order, OkxAuth adaptorAuth, OkxAuth
+    ///      protocolAuth)`. Steps:
+    ///        1. Bind THIS adapter call to the OKX signature (allowedCallers=[DexRouter,DynamicRoute]).
+    ///        2. Anti-toxic-flow check: `order.allowedSender` must be set and equal the outermost
+    ///           DexRouter caller read from the `dexRouterCaller` calldata word at offset -64 (exact marker
+    ///           match, fail-closed) — else revert RFQ_BadSender.
+    ///        3. Fill via the protocol's unique entry, forwarding `protocolAuth` (bound to the
+    ///           protocol, allowedCallers=[PmmAdapter]) verbatim.
+    function _executeV4Order(
+        address to,
+        address pool,
+        bytes memory orderInfo,
+        bytes memory signature,
+        uint256 signatureType,
+        uint256 payerOrigin
+    ) internal {
+        (OrderRFQLib.OrderRFQ memory order, OkxAuth memory adaptorAuth, OkxAuth memory protocolAuth) =
+            abi.decode(orderInfo, (OrderRFQLib.OrderRFQ, OkxAuth, OkxAuth));
+
+        // 1. Caller binding: only DexRouter / DynamicRoute (per the OKX-signed allowedCallers)
+        //    may drive this adapter path.
+        _verifyCallerAuth(adaptorAuth.allowedCallers, adaptorAuth.nonce, adaptorAuth.expiry, adaptorAuth.okxSig);
+
+        // 2. Anti-toxic-flow: allowedSender must be filled (non-zero) and match the outermost
+        //    DexRouter caller. `_extractDexRouterCaller()` returns address(0) on a missing/forged
+        //    marker, so a fail-closed zero can never satisfy a non-zero allowedSender either.
+        address dexRouterCaller = _extractDexRouterCaller();
+        if (order.allowedSender == address(0) || order.allowedSender != dexRouterCaller) {
+            revert Errors.RFQ_BadSender(order.rfqId);
+        }
+
+        // 3. Approve taker leg and settle via the protocol's unique entry.
+        uint256 flagsAndAmount;
+        {
+            uint256 amount = IERC20(order.takerAsset).balanceOf(address(this));
+            if (amount > order.takerAmount) {
+                amount = order.takerAmount;
+            }
+            require(amount > 0, "Zero balance of PMM adapter");
+            SafeERC20.safeApprove(IERC20(order.takerAsset), pool, amount);
+            flagsAndAmount = (signatureType == uint256(SignatureType.EIP1271) ? 1 << 254 : 0) + amount;
+        }
+
+        _call(
+            pool,
+            abi.encodeWithSelector(
+                IPMMProtocolV4.fillOrderRFQTo.selector,
+                order,
+                signature,
+                flagsAndAmount,
+                to,
+                protocolAuth.allowedCallers,
+                protocolAuth.nonce,
+                protocolAuth.expiry,
+                protocolAuth.okxSig
+            ),
+            order.rfqId
+        );
+
+        _handleRefund(order.takerAsset, payerOrigin);
+    }
+
     function _handleRefund(address takerAsset, uint256 payerOrigin) internal {
         address _payerOrigin;
         if ((payerOrigin & ORIGIN_PAYER) == ORIGIN_PAYER) {
-            _payerOrigin = address(uint160(uint256(payerOrigin) & ADDRESS_MASK));
+            _payerOrigin = address(uint160(uint256(payerOrigin) & _ADDRESS_MASK));
         }
         uint256 amountLeft = IERC20(takerAsset).balanceOf(address(this));
         if (amountLeft > 0 && _payerOrigin != address(0)) {
@@ -243,7 +336,7 @@ contract PMMAdapter {
         }
     }
 
-    function sellBase(address to, address pool, bytes memory moreInfo) external {
+    function sellBase(address to, address pool, bytes memory moreInfo) external nonReentrant {
         uint256 payerOrigin;
         assembly {
             let size := calldatasize()
@@ -252,7 +345,7 @@ contract PMMAdapter {
         _PMMSwap(to, pool, moreInfo, payerOrigin);
     }
 
-    function sellQuote(address to, address pool, bytes memory moreInfo) external {
+    function sellQuote(address to, address pool, bytes memory moreInfo) external nonReentrant {
         uint256 payerOrigin;
         assembly {
             let size := calldatasize()
@@ -348,6 +441,22 @@ contract PMMAdapter {
         } else if (selector == 0x1204d22d) {
             // RFQ_ConfidenceCapExceeded(uint256 rfqId);
             revert(string(abi.encodePacked("RFQ_ConfidenceCapExceeded ", rfqId.toString())));
+        } else if (selector == Errors.RFQ_BadSender.selector) {
+            // RFQ_BadSender(uint256 rfqId); (anti-toxic-flow) — mapped for observability if it
+            // ever bubbles up from a sub-call; the adapter itself reverts it directly in orderType=4.
+            revert(string(abi.encodePacked("RFQ_BadSender ", rfqId.toString())));
+        } else if (selector == CallerAuth.OSA_ZeroSigner.selector) {
+            revert(string(abi.encodePacked("OSA_ZeroSigner ", rfqId.toString())));
+        } else if (selector == CallerAuth.OSA_Expired.selector) {
+            revert(string(abi.encodePacked("OSA_Expired ", rfqId.toString())));
+        } else if (selector == CallerAuth.OSA_UntrustedCaller.selector) {
+            revert(string(abi.encodePacked("OSA_UntrustedCaller ", rfqId.toString())));
+        } else if (selector == CallerAuth.OSA_BadOkxSig.selector) {
+            revert(string(abi.encodePacked("OSA_BadOkxSig ", rfqId.toString())));
+        } else if (selector == CallerAuth.OSA_BadSigLen.selector) {
+            revert(string(abi.encodePacked("OSA_BadSigLen ", rfqId.toString())));
+        } else if (selector == CallerAuth.OSA_NonceUsed.selector) {
+            revert(string(abi.encodePacked("OSA_NonceUsed ", rfqId.toString())));
         } else {
             // Fallback: the underlying revert selector matched none of the known cases above.
             // Only for enabled (Permit2) orders do we attempt a read-only maker

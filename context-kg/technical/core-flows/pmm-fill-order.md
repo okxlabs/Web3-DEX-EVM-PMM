@@ -1,27 +1,34 @@
 ---
 name: "pmm-fill-order"
-description: "Taker-initiated fill flow — from fillOrderRFQ* entrypoint through signature verification, settlement guardrails, time-slippage, and dual-leg transfer"
+description: "Fill flow — from the single caller-bound fillOrderRFQTo entry through OKX caller-auth, maker signature verification, settlement guardrails, time-slippage, and dual-leg transfer"
+type: "design"
+title: "Flow: Fill OrderRFQ"
+tags: ["fill-flow", "fillOrderRFQTo", "caller-binding", "CallerAuth", "version-1.2", "SCDEX-1157"]
+sources: ["src/PmmProtocol.sol", "src/libraries/CallerAuth.sol", "src/OrderRFQLib.sol"]
+last_updated: "2026-07-05"
 ---
 
 # Flow: Fill OrderRFQ
 
 ## Overview
 
-A taker (or aggregator) submits a maker-signed `OrderRFQ` along with a `flagsAndAmount` instruction word. `PMMProtocol` verifies the signature, applies amount / settlement / confidence math, transfers the maker leg (standard ERC-20 or Permit2), optionally unwraps WETH for native ETH delivery, then transfers the taker leg, and emits `OrderFilledRFQ`.
+Since SCDEX-1157 the settlement entry is the **single** caller-bound `fillOrderRFQTo`. It first verifies the OKX caller-auth (`_verifyCallerAuth`), then verifies the maker signature, applies amount / settlement / confidence math, transfers the maker leg (standard ERC-20 or Permit2), optionally unwraps WETH for native ETH delivery, then transfers the taker leg, and emits `OrderFilledRFQ`. In production this entry is reached via `PMMAdapter` (orderType=4) — see [[pmm-adapter-route]].
 
 ## Participants
 
 | Actor | Role in Flow |
 |-------|-------------|
-| Maker (off-chain) | Signed the `OrderRFQ` digest against the PMMProtocol EIP-712 domain (`"OKX Labs PMM Protocol" / 1.1`). Owns the maker-asset balance. |
-| Taker | Calls `fillOrderRFQ*` from `msg.sender`; pays the taker leg (ERC-20 or native ETH wrapping into WETH). |
-| Target | Recipient of the maker leg. `msg.sender` in `fillOrderRFQ` / `fillOrderRFQCompact`; arbitrary address in `fillOrderRFQTo` / `fillOrderRFQToWithPermit`. |
+| Maker (off-chain) | Signed the 15-field `OrderRFQ` digest against the PMMProtocol EIP-712 domain (`"OKX Labs PMM Protocol" / 1.2`). Owns the maker-asset balance. |
+| Caller (`PmmAdapter`) | The only `msg.sender` in the OKX-signed `allowedCallers`; supplies `(allowedCallers, nonce, expiry, okxSig)` and the taker leg. Verified on the first line via `_verifyCallerAuth`. |
+| `OKX_SIGNER` | Off-chain signer of the caller-auth tuple; immutable trust anchor. |
+| Target | Recipient of the maker leg (the `target` arg of `fillOrderRFQTo`). |
 | `_WETH` | Wrap / unwrap helper for native ETH legs. |
 | Permit2 (`0x000000000022D473030F116dDEE9F6B43aC78BA3`) | Maker-leg custodian when `order.usePermit2 = true`. |
 
 ## Prerequisites
 
-- Maker has signed `OrderRFQ` against `PMMProtocol.DOMAIN_SEPARATOR()` using all 14 struct fields per `OrderRFQLib._LIMIT_ORDER_RFQ_TYPEHASH`.
+- The OKX-signed caller-auth tuple `(allowedCallers, nonce, expiry, okxSig)` is valid: `msg.sender ∈ allowedCallers` (== `[PmmAdapter]`), `block.timestamp <= expiry`, `okxSig` (EIP-2098 64-byte) recovers to `OKX_SIGNER`, and `nonce` is unused. Otherwise the fill reverts with an `OSA_*` error before the maker signature is even checked.
+- Maker has signed `OrderRFQ` against `PMMProtocol.DOMAIN_SEPARATOR()` using all **15** struct fields (incl. `allowedSender`) per `OrderRFQLib._LIMIT_ORDER_RFQ_TYPEHASH`.
 - `block.timestamp <= order.expiry`.
 - `(maker, order.rfqId)` bit is not set in `_invalidator` (i.e., `isRfqIdUsed(maker, rfqId) == false`).
 - Maker-leg allowance:
@@ -37,15 +44,13 @@ A taker (or aggregator) submits a maker-signed `OrderRFQ` along with a `flagsAnd
 
 ## Step-by-Step Flow
 
-Trace through `PmmProtocol.sol:100-200` (entrypoints) and `:202-337` (`_fillOrderRFQTo`).
+Trace through `PmmProtocol.sol:115-157` (the single entry) and `:159-294` (`_fillOrderRFQTo`).
 
-1. **Entry.** Caller invokes one of:
-   - `fillOrderRFQ(order, signature, flagsAndAmount)` → forwards to `fillOrderRFQTo(..., target = msg.sender)`.
-   - `fillOrderRFQTo(order, signature, flagsAndAmount, target)` → primary entrypoint, `nonReentrant`.
-   - `fillOrderRFQCompact(order, r, vs, flagsAndAmount)` → EIP-2098 64-byte path, `nonReentrant`, fills to `msg.sender`.
-   - `fillOrderRFQToWithPermit(order, signature, flagsAndAmount, target, permit)` → calls `IERC20(takerAsset).safePermit(permit)` then `fillOrderRFQTo`.
+1. **Entry.** Caller invokes the single `fillOrderRFQTo(order, signature, flagsAndAmount, target, address[] allowedCallers, uint256 nonce, uint256 expiry, bytes okxSig)` (`public payable nonReentrant`). The removed variants (`fillOrderRFQ`, `fillOrderRFQCompact`, `fillOrderRFQToWithPermit`) no longer exist.
 
-2. **Hash.** `orderHash = OrderRFQLib.hash(order, _domainSeparatorV4())`. See `arch/eip712-signature-design.md` for the exact struct encoding.
+   **1a. Caller binding (first line).** `_verifyCallerAuth(allowedCallers, nonce, expiry, okxSig)` — see [[contract-CallerAuth]]. Reverts `OSA_BadSigLen` / `OSA_BadOkxSig` / `OSA_Expired` / `OSA_UntrustedCaller` / `OSA_NonceUsed` before any order processing.
+
+2. **Hash.** `orderHash = OrderRFQLib.hash(order, _domainSeparatorV4())`. See `arch/eip712-signature-design.md` for the exact 15-field struct encoding.
 
 3. **Signature verification** (`PmmProtocol.sol:172-183`):
    - If `flagsAndAmount & _SIGNER_SMART_CONTRACT_HINT != 0`:
@@ -98,7 +103,7 @@ Trace through `PmmProtocol.sol:100-200` (entrypoints) and `:202-337` (`_fillOrde
       - `msg.value != 0` → `RFQ_InvalidMsgValue(rfqId)`.
       - `IERC20(takerAsset).safeTransferFrom(msg.sender, maker, takerAmount)`.
 
-13. **Emit** (`fillOrderRFQTo` body or `fillOrderRFQCompact` body):
+13. **Emit** (`fillOrderRFQTo` body):
     ```
     OrderFilledRFQ(
         rfqId, expiry, makerAsset, takerAsset, makerAddress,
@@ -112,6 +117,7 @@ Trace through `PmmProtocol.sol:100-200` (entrypoints) and `:202-337` (`_fillOrde
 
 | Condition | Error Thrown |
 |-----------|-------------|
+| Caller-auth fails (bad/expired/replayed okxSig or untrusted caller) | `OSA_BadSigLen` / `OSA_BadOkxSig` / `OSA_Expired` / `OSA_UntrustedCaller` / `OSA_NonceUsed` (checked first) |
 | Maker signature does not validate | `RFQ_BadSignature(rfqId)` |
 | `target == address(0)` | `RFQ_ZeroTargetIsForbidden(rfqId)` |
 | `block.timestamp > order.expiry` | `RFQ_OrderExpired(rfqId)` |
@@ -126,7 +132,6 @@ Trace through `PmmProtocol.sol:100-200` (entrypoints) and `:202-337` (`_fillOrde
 | `msg.value` mismatch on either leg | `RFQ_InvalidMsgValue(rfqId)` |
 | Underlying ERC-20 transfer fails | `SafeTransferFromFailed()` (from `SafeERC20.sol`) |
 | Permit2 transfer amount > `uint160.max` (allowance path) | `Permit2TransferAmountTooHigh()` |
-| `safePermit` blob has invalid length (`fillOrderRFQToWithPermit`) | `SafePermitBadLength()` |
 
 ## Key Invariants After Flow
 

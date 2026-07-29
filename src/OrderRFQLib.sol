@@ -14,9 +14,10 @@ library OrderRFQLib {
         uint256 makerAmount; // 0xa0
         uint256 takerAmount; // 0xc0
         bool usePermit2; // 0xe0
-        uint256 confidenceT; // 0x100
-        uint256 confidenceWeight; // 0x120
-        uint256 confidenceCap; // 0x140
+        address allowedSender; // 0x100 — anti-toxic-flow: required non-zero (SCDEX-1157 FR-5)
+        uint256 confidenceT; // 0x120
+        uint256 confidenceWeight; // 0x140
+        uint256 confidenceCap; // 0x160
         bytes permit2Signature;
         bytes32 permit2Witness;
         string permit2WitnessType;
@@ -33,6 +34,7 @@ library OrderRFQLib {
             "uint256 makerAmount,"
             "uint256 takerAmount,"
             "bool usePermit2,"
+            "address allowedSender,"
             "uint256 confidenceT,"
             "uint256 confidenceWeight,"
             "uint256 confidenceCap,"
@@ -57,6 +59,7 @@ library OrderRFQLib {
                 order.makerAmount,
                 order.takerAmount,
                 order.usePermit2,
+                order.allowedSender,
                 order.confidenceT,
                 order.confidenceWeight,
                 order.confidenceCap,

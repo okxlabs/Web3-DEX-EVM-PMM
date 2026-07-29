@@ -3,18 +3,21 @@ squad: web3-dex
 domain: pmm
 sub_domain: pmm_adapter_migration
 title: PMMAdapter V1/V2/V3 OrderRFQ Migration
-source_docs: ["README.md (Document Versions §2.1)", "src/PmmAdaptor.sol", "src/libraries/Errors.sol", "DEPLOYMENT.md"]
-concept_keys: [PmmAdapter, OrderRFQV1, OrderRFQV2, OrderRFQV3, OrderType, SignatureType, SellBase, SellQuote, PayerOrigin, RefundFlow]
+source_docs: ["README.md (Document Versions §2.1)", "docs/research-design-note.md (SCDEX-1157)", "src/PmmAdaptor.sol", "src/libraries/Errors.sol", "DEPLOYMENT.md"]
+concept_keys: [PmmAdapter, OrderRFQV1, OrderRFQV2, OrderRFQV3, OrderType, OrderType4, SignatureType, SellBase, SellQuote, PayerOrigin, RefundFlow]
 organized_at: 2026-06-01T00:00:00Z
+last_updated: 2026-07-05
 ---
 
 # PMMAdapter V1/V2/V3 OrderRFQ Migration
 
 > Business line: Web3 DEX (PMM Aggregator Integration)
 
+> **SCDEX-1157 update (2026-07-05).** The adapter added a **fourth** order type, `orderType == 4` (anti-toxic-flow), and now **inherits `CallerAuth` + `ReentrancyGuard`** — it is no longer stateless. The V1/V2/V3 legacy shapes and dispatch below are unchanged. The new path (`allowedSender == dexRouterCaller` + OKX caller binding) is documented in [[pmm_anti_toxic_flow]]; this doc stays focused on the legacy version migration.
+
 ## One-line Summary
 
-`PMMAdapter` is the OKX DEX aggregator's stateless dispatch layer: it accepts a versioned `OrderRFQ` payload (V1 / V2 / V3), approves the downstream `PMMProtocol` (called `pool`) for the taker asset balance the adapter currently holds, forwards the fill, refunds any leftover, and decodes downstream `RFQ_*` custom errors into human-readable strings. The three versions exist for **backward compatibility** with in-flight maker quotes during protocol upgrades.
+`PMMAdapter` is the OKX DEX aggregator's dispatch layer: it accepts a versioned `OrderRFQ` payload (V1 / V2 / V3 legacy, plus V4/orderType=4 anti-toxic), approves the downstream `PMMProtocol` (called `pool`) for the taker asset balance the adapter currently holds, forwards the fill, refunds any leftover, and decodes downstream `RFQ_*` custom errors into human-readable strings. The three legacy versions exist for **backward compatibility** with in-flight maker quotes during protocol upgrades. As of SCDEX-1157 the adapter inherits `CallerAuth` + `ReentrancyGuard` (carries nonce/reentrancy storage — no longer stateless).
 
 ---
 
@@ -38,7 +41,7 @@ The adapter declares three `OrderRFQ` interfaces in `src/PmmAdaptor.sol` (lines 
 | V2 | 11 fields | `src/PmmAdaptor.sol:25-43` (interface `IPMMProtocolV2`) | Adds inline Permit2 fields: `bytes permit2Signature, bytes32 permit2Witness, string permit2WitnessType`. (Source: src/PmmAdaptor.sol:35-37) |
 | V3 | 14 fields | `src/PmmAdaptor.sol:45-68` (interface `IPMMProtocolV3`) | Adds time-slippage fields: `uint256 confidenceT, uint256 confidenceWeight, uint256 confidenceCap`. (Source: src/PmmAdaptor.sol:55-57) |
 
-The live struct in `src/OrderRFQLib.sol` matches **V3**. The README's "Document Versions" section names this layout as `v4.0 (Feb 2026)` at the README level, but the on-chain struct version exposed by the adapter is `V3` — README's `v2.0`/`v3.0`/`v4.0` and the adapter's `V1`/`V2`/`V3` are independent numbering schemes for the same evolution. (Source: README.md §2.1 + src/PmmAdaptor.sol:45-68 + src/OrderRFQLib.sol:8-23)
+As of SCDEX-1157 the live struct in `src/OrderRFQLib.sol` is **15 fields** (V3's 14 fields + `allowedSender`) and no longer matches the `IPMMProtocolV3` interface; it is consumed by the new orderType=4 path (`IPMMProtocolV4`, which reuses `OrderRFQLib.OrderRFQ` directly). The three frozen `IPMMProtocolV{1,2,3}` interfaces remain for legacy in-flight quotes. (Source: src/PmmAdaptor.sol:59-99 + src/OrderRFQLib.sol:8-24)
 
 ### 2.2 Aggregator Dispatch Flow (`SellBase` / `SellQuote`)
 
@@ -60,7 +63,8 @@ Both are structurally **byte-for-byte identical** — they both call `_PMMSwap(t
    - `1` → `_executeV1Order` (8-field decode)
    - `2` → `_executeV2Order` (11-field decode)
    - `3` → `_executeV3Order` (14-field decode)
-   - any other value → revert `"PMMAdapter: unsupported orderType"`. (Source: src/PmmAdaptor.sol:87-95)
+   - `4` → `_executeV4Order` (15-field OrderRFQ + two `OkxAuth` tuples; caller-auth + `allowedSender` check — see [[pmm_anti_toxic_flow]])
+   - any other value → revert `"PMMAdapter: unsupported orderType"`.
 4. Each `_executeV*Order` does the same five steps:
    1. Decode `orderInfo` into the matching `IPMMProtocolV{1,2,3}.OrderRFQ`. (Source: src/PmmAdaptor.sol:106, :135, :164)
    2. `amount = min(IERC20(takerAsset).balanceOf(adapter), order.takerAmount)`. (Source: src/PmmAdaptor.sol:109-112, :138-141, :167-170)
@@ -208,7 +212,7 @@ Failure exits short-circuit at any step; no rollback logic needed because of EVM
 |------|-------------------|-------------|
 | Aggregator router (any caller) | `sellBase(to, pool, moreInfo)`, `sellQuote(to, pool, moreInfo)` | `pool` is supplied per-call; nothing is pinned. The adapter is permissionless. (Source: src/PmmAdaptor.sol:197-213) |
 
-- **Immutable roles**: none — `PMMAdapter` is a stateless dispatch contract.
+- **Immutable roles**: `OKX_SIGNER` (from `CallerAuth`, set at deploy, used by orderType=4). No owner/admin. As of SCDEX-1157 `PMMAdapter` is no longer stateless (carries a caller-auth nonce bitmap + reentrancy status).
 - **Open question**: whether the aggregator deployment exposes `PMMAdapter` publicly or only behind a trusted router. The contract itself imposes no restriction. (See [[contract-PMMAdapter]] for the same open item flagged at the technical level.)
 
 ---
@@ -261,7 +265,7 @@ Failure exits short-circuit at any step; no rollback logic needed because of EVM
 
 | Term | Definition |
 |------|------------|
-| `PMMAdapter` | The stateless dispatch contract in `src/PmmAdaptor.sol`. Currently single deployment per chain (see `DEPLOYMENT.md`). |
+| `PMMAdapter` | The dispatch contract in `src/PmmAdaptor.sol` (inherits `CallerAuth` + `ReentrancyGuard` as of SCDEX-1157; no longer stateless). Currently single deployment per chain (see `DEPLOYMENT.md`). |
 | `pool` | Per-call address of a `PMMProtocol` instance the adapter forwards into. |
 | `orderType` | Caller-supplied dispatch tag: `1` = V1, `2` = V2, `3` = V3. Defined inside the `moreInfo` payload. |
 | `sellBase` / `sellQuote` | The two external entry-points exposed by `PMMAdapter`. Byte-for-byte identical bodies. In AMM-style adapters these names conventionally signal swap direction; in PMM they do not — direction comes from `OrderRFQ.makerAsset` / `takerAsset`. |
@@ -269,7 +273,7 @@ Failure exits short-circuit at any step; no rollback logic needed because of EVM
 | `SignatureType.EIP1271` | Smart-contract signer path; sets bit 254 of `flagsAndAmount`. |
 | `IPMMProtocolV1.OrderRFQ` | 8-field shape (pre-Permit2 inline fields). |
 | `IPMMProtocolV2.OrderRFQ` | 11-field shape (adds `permit2Signature`, `permit2Witness`, `permit2WitnessType`). |
-| `IPMMProtocolV3.OrderRFQ` | 14-field shape (adds `confidenceT`, `confidenceWeight`, `confidenceCap`). Matches the live `OrderRFQLib.OrderRFQ`. |
+| `IPMMProtocolV3.OrderRFQ` | 14-field legacy shape (adds `confidenceT`, `confidenceWeight`, `confidenceCap`). **No longer matches** the live `OrderRFQLib.OrderRFQ`, which is now 15 fields (SCDEX-1157 added `allowedSender`) and is used by the orderType=4 path via `IPMMProtocolV4`. |
 | `PayerOrigin` | Trailing 32-byte calldata word; high bits sentinel + low 160 bits payer address. |
 | `ORIGIN_PAYER` | `0x3ca20afc2ccc0000…`; sentinel high-bit pattern enabling refund flow. |
 | `RefundFlow` | The `_handleRefund` step that returns any residual `takerAsset` to the payer. |

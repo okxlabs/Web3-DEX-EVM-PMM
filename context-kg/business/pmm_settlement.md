@@ -3,10 +3,13 @@ squad: web3-dex
 domain: pmm
 sub_domain: pmm_settlement
 title: PMM RFQ Settlement (On-Chain)
-source_docs: ["README.md (v4.0 — Feb 2026)", "src/PmmProtocol.sol", "src/OrderRFQLib.sol", "src/EIP712.sol", "src/libraries/SafeERC20.sol", "src/helpers/AmountCalculator.sol", "src/libraries/Errors.sol"]
-concept_keys: [PmmProtocol, OrderRFQ, RfqId, MakerLeg, TakerLeg, SettlementLimit, ConfidenceWindow, ConfidenceCap, Permit2AllowancePath, Permit2SignaturePath, Permit2WitnessPath, WethUnwrap, InvalidatorBitmap, CancelOrderRfq, FlagsAndAmount]
+source_docs: ["README.md (v4.0 — Feb 2026)", "docs/research-design-note.md (SCDEX-1157)", "src/PmmProtocol.sol", "src/OrderRFQLib.sol", "src/EIP712.sol", "src/libraries/CallerAuth.sol", "src/libraries/SafeERC20.sol", "src/helpers/AmountCalculator.sol", "src/libraries/Errors.sol"]
+concept_keys: [PmmProtocol, OrderRFQ, RfqId, AllowedSender, CallerAuth, OkxSigner, MakerLeg, TakerLeg, SettlementLimit, ConfidenceWindow, ConfidenceCap, Permit2AllowancePath, Permit2SignaturePath, Permit2WitnessPath, WethUnwrap, InvalidatorBitmap, CancelOrderRfq, FlagsAndAmount]
 organized_at: 2026-06-01T00:00:00Z
+last_updated: 2026-07-05
 ---
+
+> **SCDEX-1157 update (2026-07-05).** The settlement entry converged to a **single caller-bound** `fillOrderRFQTo`; `OrderRFQ` is now **15 fields** (added required `allowedSender`); the EIP-712 domain version is **1.2**. Anti-toxic-flow specifics live in [[pmm_anti_toxic_flow]]; caller binding in [[contract-CallerAuth]]. Sections below are annotated where the change lands.
 
 # PMM RFQ Settlement (On-Chain)
 
@@ -30,7 +33,7 @@ organized_at: 2026-06-01T00:00:00Z
 
 ### 2.1 OrderRFQ Struct & EIP-712 Signing (`OrderRFQ`)
 
-**Struct** (14 fields, declared in `src/OrderRFQLib.sol:7-23`):
+**Struct** (**15 fields**, declared in `src/OrderRFQLib.sol:8-24`):
 
 | # | Field | Type | Purpose |
 |---|-------|------|---------|
@@ -42,26 +45,29 @@ organized_at: 2026-06-01T00:00:00Z
 | 6 | `makerAmount` | `uint256` | Quoted maker size |
 | 7 | `takerAmount` | `uint256` | Quoted taker size |
 | 8 | `usePermit2` | `bool` | If true, maker leg uses Permit2 |
-| 9 | `confidenceT` | `uint256` | Unix timestamp where time-slippage activates (0 disables) |
-| 10 | `confidenceWeight` | `uint256` | Reduction rate per second in 1e6 units |
-| 11 | `confidenceCap` | `uint256` | Max cumulative reduction (1e6 units); hard-capped at 50000 (5%) |
-| 12 | `permit2Signature` | `bytes` | Optional inline Permit2 signature |
-| 13 | `permit2Witness` | `bytes32` | Pre-hashed witness data |
-| 14 | `permit2WitnessType` | `string` | Canonical witness type string |
+| 9 | `allowedSender` | `address` | **NEW (SCDEX-1157).** Required non-zero address the maker quoted for; checked in PMMAdapter (orderType=4) as `allowedSender == dexRouterCaller`. See [[pmm_anti_toxic_flow]]. |
+| 10 | `confidenceT` | `uint256` | Unix timestamp where time-slippage activates (0 disables) |
+| 11 | `confidenceWeight` | `uint256` | Reduction rate per second in 1e6 units |
+| 12 | `confidenceCap` | `uint256` | Max cumulative reduction (1e6 units); hard-capped at 50000 (5%) |
+| 13 | `permit2Signature` | `bytes` | Optional inline Permit2 signature |
+| 14 | `permit2Witness` | `bytes32` | Pre-hashed witness data |
+| 15 | `permit2WitnessType` | `string` | Canonical witness type string |
 
-**Domain**: `name="OKX Labs PMM Protocol"`, `version="1.1"`, `chainId=block.chainid`, `verifyingContract=address(this)` (`src/PmmProtocol.sol:58-75`, `src/EIP712.sol:52-63`).
+**Domain**: `name="OKX Labs PMM Protocol"`, `version="1.2"` (bumped from `1.1` for `allowedSender`), `chainId=block.chainid`, `verifyingContract=address(this)` (`src/PmmProtocol.sol:59-79`, `src/EIP712.sol:52-63`).
 
-**Main flow** (fill entrypoint → `_fillOrderRFQTo`):
+**Main flow** (single fill entry → `_fillOrderRFQTo`):
 
-1. Caller invokes one of `fillOrderRFQ` / `fillOrderRFQTo` / `fillOrderRFQCompact` / `fillOrderRFQToWithPermit`. (Source: src/PmmProtocol.sol:100-200)
-2. Compute `orderHash = OrderRFQLib.hash(order, _domainSeparatorV4())`. (Source: src/PmmProtocol.sol:114, :171)
-3. Verify the maker signature: ECDSA recover (EOA) or ERC-1271 `isValidSignature` (contract signer), gated by bits 254/253 of `flagsAndAmount`. Failure → `RFQ_BadSignature(rfqId)`. (Source: src/PmmProtocol.sol:115-129, :172-183)
-4. Run `_fillOrderRFQTo` — see §2.2 through §2.7. (Source: src/PmmProtocol.sol:202)
+1. Caller invokes the single caller-bound `fillOrderRFQTo(order, signature, flagsAndAmount, target, allowedCallers, nonce, expiry, okxSig)` — first line `_verifyCallerAuth(...)` (OKX caller binding, `allowedCallers == [PmmAdapter]`; else `OSA_*`). The prior `fillOrderRFQ` / `fillOrderRFQCompact` / `fillOrderRFQToWithPermit` variants were removed. (Source: src/PmmProtocol.sol:115-126)
+2. Compute `orderHash = OrderRFQLib.hash(order, _domainSeparatorV4())` over 15 fields. (Source: src/PmmProtocol.sol:128)
+3. Verify the maker signature: ECDSA recover (EOA) or ERC-1271 `isValidSignature` (contract signer), gated by bits 254/253 of `flagsAndAmount`. Failure → `RFQ_BadSignature(rfqId)`. (Source: src/PmmProtocol.sol:129-140)
+4. Run `_fillOrderRFQTo` — see §2.2 through §2.7. (Source: src/PmmProtocol.sol:141)
 
 **Key constraints**:
-- [Rule] `permit2Signature` (`bytes`) and `permit2WitnessType` (`string`) MUST be hashed via `keccak256` before being placed into the EIP-712 struct hash; `permit2Witness` (`bytes32`) is encoded directly. (Source: src/OrderRFQLib.sol:46-69)
-- [Rule] When `usePermit2 = true` and `permit2Signature` is non-empty, the Permit2 signature MUST be signed FIRST (against the Permit2 domain, no `version` field), then embedded into `order.permit2Signature` before computing the OrderRFQ digest. The OrderRFQ struct hash depends on `keccak256(permit2Signature)`. (Source: derived from src/OrderRFQLib.sol:63 + Permit2 EIP-712 spec)
-- [Rule] Changing `_NAME` or `_VERSION` invalidates every outstanding maker signature. (Source: src/PmmProtocol.sol:58-59, src/EIP712.sol:52-63)
+- [Rule] `permit2Signature` (`bytes`) and `permit2WitnessType` (`string`) MUST be hashed via `keccak256` before being placed into the EIP-712 struct hash; `permit2Witness` (`bytes32`) is encoded directly. (Source: src/OrderRFQLib.sol:48-72)
+- [Rule] `allowedSender` MUST be a non-zero address and is part of the signed digest; the equality check against the DexRouter caller is enforced in PMMAdapter, not here. (Source: src/OrderRFQLib.sol:17, src/PmmAdaptor.sol:291)
+- [Rule] When `usePermit2 = true` and `permit2Signature` is non-empty, the Permit2 signature MUST be signed FIRST (against the Permit2 domain, no `version` field), then embedded into `order.permit2Signature` before computing the OrderRFQ digest. The OrderRFQ struct hash depends on `keccak256(permit2Signature)`. (Source: src/OrderRFQLib.sol:66 + Permit2 EIP-712 spec)
+- [Rule] Changing `_NAME` or `_VERSION` invalidates every outstanding maker signature (the `1.1 → 1.2` bump already did). (Source: src/PmmProtocol.sol:59-63, src/EIP712.sol:52-63)
+- [Rule] Reaching settlement requires an OKX-signed caller-auth (`okxSig`) in addition to the maker signature; only `[PmmAdapter]` may call `fillOrderRFQTo`. (Source: src/PmmProtocol.sol:126, [[contract-CallerAuth]])
 
 ### 2.2 RFQ-ID Replay Protection (`InvalidatorBitmap`, `RfqId`)
 
@@ -221,9 +227,11 @@ Otherwise (non-WETH taker, OR WETH taker with `msg.value == 0`):
 - [Rule] The unwrap-forward `.call` has a `5000`-gas stipend; `target` must accept ETH within that budget or the fill reverts. (Source: src/PmmProtocol.sol:61, :322)
 - [Pitfall] `_WETH.transfer` on the taker-leg wrap does not check the return value (lint warning suppressed because WETH9 is a known-good contract). (Source: src/PmmProtocol.sol:332)
 
-### 2.8 Taker Permit (EIP-2612 / Dai-Style)
+### 2.8 Taker Permit (EIP-2612 / Dai-Style) — REMOVED
 
-`fillOrderRFQToWithPermit` accepts an ERC-20 permit blob for the taker asset and consumes it before settling (`src/PmmProtocol.sol:149-158`). `SafeERC20.safePermit` auto-detects:
+> **SCDEX-1157:** `fillOrderRFQToWithPermit` was **removed** along with the other fill variants. The taker-permit convenience path no longer exists on-chain; a taker that needs a gasless approval must run the ERC-20 permit in a separate call before the adapter-driven fill. The historical behavior (`SafeERC20.safePermit` auto-detect) is retained below for reference only.
+
+Historical (pre-1.2): `fillOrderRFQToWithPermit` accepted an ERC-20 permit blob for the taker asset and consumed it before settling. `SafeERC20.safePermit` auto-detected:
 - `permit.length == 32 * 7` → EIP-2612 `permit`. (Source: src/libraries/SafeERC20.sol:109-110)
 - `permit.length == 32 * 8` → Dai-style `permit`. (Source: src/libraries/SafeERC20.sol:111-112)
 - Any other length → `SafePermitBadLength`. (Source: src/libraries/SafeERC20.sol:113-114)
@@ -261,7 +269,7 @@ The state of an `(maker, rfqId)` pair is captured implicitly in the `_invalidato
 ### 3.2 OrderRFQ State Transitions
 
 ```
-UNUSED ──── fill succeeds (fillOrderRFQ*) ─────────►  CONSUMED
+UNUSED ──── fill succeeds (fillOrderRFQTo) ────────►  CONSUMED
 UNUSED ──── maker calls cancelOrderRFQ(rfqId) ────►   CONSUMED
 
 CONSUMED ─── (terminal — no transition out)
@@ -285,7 +293,7 @@ Failure path from CONSUMED:
 
 ## 4. Core Calculation Rules
 
-- **`orderHash`** = `ECDSA.toTypedDataHash(domainSeparator, keccak256(abi.encode(_LIMIT_ORDER_RFQ_TYPEHASH, ...14 fields...)))`. (Source: src/OrderRFQLib.sol:46-69)
+- **`orderHash`** = `ECDSA.toTypedDataHash(domainSeparator, keccak256(abi.encode(_LIMIT_ORDER_RFQ_TYPEHASH, ...15 fields incl. allowedSender...)))`. (Source: src/OrderRFQLib.sol:48-72)
 - **`makerAmount`** (taker-side fill) = `(swapTakerAmount * orderMakerAmount) / orderTakerAmount` — floored. (Source: src/helpers/AmountCalculator.sol:8-14)
 - **`takerAmount`** (maker-side fill) = `(swapMakerAmount * orderTakerAmount + orderMakerAmount - 1) / orderMakerAmount` — ceiled. (Source: src/helpers/AmountCalculator.sol:19-25)
 - **Settlement minimum** = `order.{maker,taker}Amount × 0.60`; both legs must satisfy. (Source: src/PmmProtocol.sol:66-67, :256-261)
@@ -298,10 +306,11 @@ Failure path from CONSUMED:
 
 | Role | Permitted Actions | Constraints |
 |------|-------------------|-------------|
-| Maker (any EOA or ERC-1271 contract) | Sign `OrderRFQ`; call `cancelOrderRFQ(uint64)` to invalidate own `rfqId` | Authorization is the EIP-712 signature (for fills) or `msg.sender == makerAddress` (for cancellation). Cannot cancel another maker's IDs. |
-| Taker / anyone | Call any `fillOrderRFQ*` with a valid maker signature | The maker signature is the only authorization. No anti-front-run protection — front-running is acceptable by design (src/PmmProtocol.sol:159-160). |
+| Maker (any EOA or ERC-1271 contract) | Sign `OrderRFQ`; call `cancelOrderRFQ(uint64)` to invalidate own `rfqId` | Authorization is the EIP-712 signature (for fills) or `msg.sender == makerAddress` (for cancellation). Cannot cancel another maker's IDs. `cancelOrderRFQ` is NOT caller-bound. |
+| Caller of `fillOrderRFQTo` | Must be in the OKX-signed `allowedCallers` (`[PmmAdapter]`) with a valid `okxSig` | **Changed by SCDEX-1157.** Settlement is no longer callable by an arbitrary `msg.sender`; direct standalone calls revert `OSA_UntrustedCaller`. The maker signature is still required in addition. |
+| `OKX_SIGNER` | Immutable, set at deploy | Off-chain authorizes the caller set (`CallerAuth`). No mutable admin. See [[contract-CallerAuth]]. |
 | `_WETH` only | Send ETH to the contract (during `withdraw`) | Any other ETH sender → `RFQ_EthDepositRejected`. (Source: src/PmmProtocol.sol:79-83) |
-| Aggregator router | Call `PMMAdapter.sellBase` / `sellQuote`; see [[pmm_adapter_migration]] | Adapter is stateless; downstream calls `PMMProtocol.fillOrderRFQTo`. |
+| Aggregator router | Call `PMMAdapter.sellBase` / `sellQuote`; see [[pmm_adapter_migration]] / [[pmm_anti_toxic_flow]] | Adapter now inherits `CallerAuth`+`ReentrancyGuard` (not stateless); it calls `PMMProtocol.fillOrderRFQTo` (must be in `allowedCallers`). |
 
 - **Immutable roles**: `_WETH` (set in constructor, no setter — redeploy to change). No owner / admin role exists.
 - **Zero-address validation**: `target == address(0)` → `RFQ_ZeroTargetIsForbidden`. (Source: src/PmmProtocol.sol:206-208)
@@ -312,7 +321,7 @@ Failure path from CONSUMED:
 
 | Event Name | Trigger Condition | Key Parameters |
 |------------|-------------------|----------------|
-| `OrderFilledRFQ` | A successful fill via `fillOrderRFQTo` or `fillOrderRFQCompact` | `rfqId` (indexed), `expiry`, `makerAsset` (indexed), `takerAsset` (indexed), `makerAddress`, `expectedMakerAmount`, `expectedTakerAmount`, `filledMakerAmount`, `filledTakerAmount`, `usePermit2`, `permit2Signature`, `permit2Witness`, `permit2WitnessType` (Source: src/PmmProtocol.sol:33-47) |
+| `OrderFilledRFQ` | A successful fill via `fillOrderRFQTo` (the single fill entry) | `rfqId` (indexed), `expiry`, `makerAsset` (indexed), `takerAsset` (indexed), `makerAddress`, `expectedMakerAmount`, `expectedTakerAmount`, `filledMakerAmount`, `filledTakerAmount`, `usePermit2`, `permit2Signature`, `permit2Witness`, `permit2WitnessType` (Source: src/PmmProtocol.sol:34-48) |
 | `OrderCancelledRFQ` | Maker invalidates an unused `rfqId` via `cancelOrderRFQ` | `rfqId` (indexed), `maker` (indexed) (Source: src/PmmProtocol.sol:56) |
 
 **Observation note**: there is no event for failed fills; reverts surface as named custom errors from `src/libraries/Errors.sol`.
@@ -321,10 +330,10 @@ Failure path from CONSUMED:
 
 ## 7. Constraints & Risk Rules
 
-- [Rule] `fillOrderRFQTo` and `fillOrderRFQCompact` are `nonReentrant` (OpenZeppelin `ReentrancyGuard`). External token transfers and a low-level ETH `.call` are the reentrancy surface. (Source: src/PmmProtocol.sol:111, :170)
+- [Rule] The single `fillOrderRFQTo` entry is `nonReentrant` (OpenZeppelin `ReentrancyGuard`) and caller-bound (`_verifyCallerAuth` first line). External token transfers and a low-level ETH `.call` are the reentrancy surface. (Source: src/PmmProtocol.sol:124, :126)
 - [Rule] `_invalidator` is updated BEFORE any token transfer (CEI pattern). (Source: src/PmmProtocol.sol:219 vs :287)
 - [Rule] `_WETH` is `immutable` — set once in the constructor, no setter exists. (Source: src/PmmProtocol.sol:72, :75-77)
-- [Rule] `_NAME = "OKX Labs PMM Protocol"` and `_VERSION = "1.1"` are `constant`. Any change is a breaking redeploy because the cached domain separator depends on them. (Source: src/PmmProtocol.sol:58-59)
+- [Rule] `_NAME = "OKX Labs PMM Protocol"` and `_VERSION = "1.2"` are `constant`. Any change is a breaking redeploy because the cached domain separator depends on them (the `1.1 → 1.2` bump for `allowedSender` already invalidated old signatures). (Source: src/PmmProtocol.sol:59, :63)
 - [Rule] All ERC-20 transfers from `PMMProtocol` use the project's local `SafeERC20` (`src/libraries/SafeERC20.sol`) — never bare `IERC20.transfer` / `transferFrom`.
 - [Rule] Fee-on-transfer (deflationary / rebasing) tokens are NOT supported — the protocol uses calculated transfer amounts, not balance deltas. (Source: src/PmmProtocol.sol:162-164)
 - [Rule] Maker amount > `uint160.max` is rejected at full-fill time when `usePermit2 = true` (`RFQ_AmountTooLarge`). (Source: src/PmmProtocol.sol:233-235)
@@ -349,7 +358,7 @@ Failure path from CONSUMED:
 - [ ] Permit2 signature + witness path: `IPermit2.permitWitnessTransferFrom` called with `permit2Witness` and `permit2WitnessType`.
 - [ ] WETH unwrap on maker leg: `_WETH.withdraw` succeeds, native ETH reaches `target` within 5000 gas.
 - [ ] WETH wrap on taker leg with `msg.value == takerAmount`: ETH wrapped, WETH transferred to maker.
-- [ ] `fillOrderRFQToWithPermit` with EIP-2612 permit (7×32 bytes) and Dai-style permit (8×32 bytes): both succeed.
+- [ ] (Removed — `fillOrderRFQToWithPermit` no longer exists as of SCDEX-1157; drop this case.)
 - [ ] Cancel an unused `rfqId`: bit set, `OrderCancelledRFQ` emitted.
 
 ### Unhappy Path
@@ -382,7 +391,9 @@ Failure path from CONSUMED:
 
 ## 9. Integration Modes (Standalone vs Aggregator)
 
-`PMMProtocol` is **not** coupled to OKX's DexRouter. The only on-chain authorization is the maker's EIP-712 signature; `msg.sender` is unrestricted. Three integration modes:
+> **SCDEX-1157 note.** The statements below describing an *unrestricted `msg.sender`* / *aggregator-agnostic* model are **superseded** for the current contract: `fillOrderRFQTo` is now caller-bound to the OKX-signed `[PmmAdapter]`, so standalone and third-party-aggregator direct calls revert `OSA_UntrustedCaller`. The historical description is retained for context on the *pre-1.2* deployments still live on-chain (see [[pmm_anti_toxic_flow]] and [[contract-CallerAuth]] for the current model).
+
+`PMMProtocol` (pre-1.2) was **not** coupled to OKX's DexRouter. On the pre-1.2 contract the only on-chain authorization was the maker's EIP-712 signature and `msg.sender` was unrestricted. Three historical integration modes:
 
 | Mode | Caller of `fillOrderRFQ*` | Funds flow | When to use |
 |------|---------------------------|------------|-------------|
@@ -390,10 +401,10 @@ Failure path from CONSUMED:
 | **Via OKX DexRouter** | OKX `SmartSwapRouter` → `PMMAdapter` → `PMMProtocol` | Router transfers taker asset to `PMMAdapter` first; adapter `safeApprove`s `PMMProtocol`; protocol pulls from adapter | Production default path (see [[pmm_adapter_migration]] §2.6) |
 | **Via 3rd-party aggregator** | Their adapter shim (must conform to their adapter ABI) → `PMMProtocol` | Whatever the 3rd-party aggregator decides | 1inch / Paraswap / etc. — `PMMProtocol` itself is aggregator-agnostic |
 
-**Authorization model is aggregator-agnostic** — `PMMProtocol` has no owner, no admin, no role gating. The only privileged data flow is the maker signature, which the contract verifies via `ECDSA.recoverOrIsValidSignature` or `ECDSA.isValidSignature` (ERC-1271). Whoever holds a valid signature can fill the order. (Source: src/PmmProtocol.sol — `grep -n "modifier\|onlyOwner"` returns only OZ's `nonReentrant`.)
+**Authorization model (pre-1.2, superseded)** — the pre-1.2 `PMMProtocol` had no owner/admin/role gating, and whoever held a valid maker signature could fill from any `msg.sender`. **On the current 1.2 contract this is no longer true**: `fillOrderRFQTo` requires the OKX-signed caller binding (`allowedCallers == [PmmAdapter]`), so a valid maker signature alone is not sufficient — the caller must also be authorized. There is still no owner/admin role (`OKX_SIGNER` is immutable). See [[pmm_anti_toxic_flow]] / [[contract-CallerAuth]].
 
-**Key constraints**:
-- [Rule] `fillOrderRFQ*` is callable by ANY address; no whitelist. (Source: src/PmmProtocol.sol:100-200)
+**Key constraints** (⚠ pre-1.2 — superseded by the caller binding; retained for historical context only):
+- [Historical] On pre-1.2 deployments `fillOrderRFQ*` was callable by ANY address; no whitelist. **On the current 1.2 contract, `fillOrderRFQTo` is caller-bound to `[PmmAdapter]`** — arbitrary callers revert `OSA_UntrustedCaller` (see [[pmm_anti_toxic_flow]]).
 - [Rule] `target` (maker-leg recipient) is a function parameter, NOT part of `OrderRFQ`; the maker did not sign a specific recipient. The taker decides where the maker leg lands. (Source: src/PmmProtocol.sol:165-170 — `target` is the 4th arg of `fillOrderRFQTo`, not a struct field)
 - [Rule] `PMMAdapter` is one valid taker path among many — its existence is convenience, not a protocol requirement. The same `PMMProtocol` instance accepts fills from any caller. (Source: derived from the unrestricted `msg.sender` semantics above.)
 - [Pitfall] Standalone integrators are responsible for delivering exactly `takerAmount` of `takerAsset` to the protocol (or `msg.value == takerAmount` for WETH legs). There is no built-in refund — the leftover-refund behaviour in [[pmm_adapter_migration]] §2.4 is an adapter-side convenience, not a protocol feature. (Source: src/PmmProtocol.sol:327-336 — no refund branch)
@@ -405,8 +416,10 @@ Failure path from CONSUMED:
 
 | Term | Definition |
 |------|------------|
-| `PmmProtocol` | Main on-chain settlement contract. Inherits `EIP712` and `ReentrancyGuard`. |
-| `OrderRFQ` | 14-field struct defined in `src/OrderRFQLib.sol`; the unit a maker signs and a taker fills. |
+| `PmmProtocol` | Main on-chain settlement contract. Inherits `EIP712`, `CallerAuth`, and `ReentrancyGuard`. |
+| `OrderRFQ` | **15-field** struct defined in `src/OrderRFQLib.sol` (incl. `allowedSender`); the unit a maker signs and the adapter fills. |
+| `AllowedSender` | Required non-zero `OrderRFQ` field; the address the maker priced for. Checked against `dexRouterCaller` in PMMAdapter orderType=4 (else `RFQ_BadSender`). |
+| `CallerAuth` | OKX-signed caller-binding base inherited by `PMMProtocol` and `PMMAdapter`. |
 | `rfqId` | RFQ identifier; `uint256` field but only the low 64 bits are significant on-chain. |
 | `MakerLeg` | The maker-asset transfer from the maker to the taker (or `target`); may use 4 different paths (§2.6). |
 | `TakerLeg` | The taker-asset transfer from `msg.sender` to the maker; may wrap native ETH into WETH. |
