@@ -4,6 +4,17 @@ pragma solidity 0.8.17;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import {OrderRFQLib} from "./OrderRFQLib.sol";
+import {CallerAuth} from "./libraries/CallerAuth.sol";
+import {Errors} from "./libraries/Errors.sol";
+import {ORIGIN_PAYER, MARKER_MASK, _ADDRESS_MASK} from "./libraries/Constants.sol";
+
+struct CallerAuthData {
+    address[] allowedCallers;
+    uint256 nonce;
+    bytes authSig;
+}
 
 interface IPMMProtocolV1 {
     struct OrderRFQ {
@@ -67,18 +78,45 @@ interface IPMMProtocolV3 {
     function DOMAIN_SEPARATOR() external view returns (bytes32);
 }
 
-contract PMMAdapter {
+interface IPMMProtocolV4 {
+    function fillOrderRFQTo(
+        OrderRFQLib.OrderRFQ memory order,
+        bytes calldata signature,
+        uint256 flagsAndAmount,
+        address target,
+        address[] calldata allowedCallers,
+        uint256 nonce,
+        bytes calldata authSig
+    ) external returns (uint256, uint256, bytes32);
+}
+
+contract PMMAdapter is CallerAuth, ReentrancyGuard {
     using Strings for uint256;
 
-    uint256 internal constant ORIGIN_PAYER = 0x3ca20afc2ccc0000000000000000000000000000000000000000000000000000;
-    uint256 constant ADDRESS_MASK = 0x000000000000000000000000ffffffffffffffffffffffffffffffffffffffff;
+    // Protocol-level hard cap on confidence (time-slippage) cutdown, mirrors
+    // PmmProtocol.sol `_CONFIDENCE_CAP_LIMIT` (5% in 1e6 units). Used only by the
+    // read-only maker-balance fallback check; see _getMakerAmountForBalanceCheck.
+    uint256 private constant _CONFIDENCE_CAP_LIMIT = 50000;
 
     enum SignatureType {
         EIP712,
         EIP1271
     }
 
-    constructor() {}
+    /// @dev In-memory context for the read-only maker-balance recheck performed in the
+    /// `_call` fallback (else) branch. Populated only for V2/V3 Permit2 paths;
+    /// when `enabled == false` the 4-arg `_call` behaves identically to the legacy 3-arg one.
+    struct MakerBalanceCheck {
+        bool enabled; // true only for Permit2-signature V2/V3 orders
+        address makerAsset; // order.makerAsset — token whose balanceOf(maker) is queried
+        address maker; // order.makerAddress — account whose balance is checked
+        uint256 makerAmount; // maker payout for the fill (stage-1 threshold)
+        uint256 confidenceT; // order.confidenceT      ┐ V3 time-slippage inputs
+        uint256 confidenceWeight; // order.confidenceWeight ├ (V2 fills these with 0 → disabled)
+        uint256 confidenceCap; // order.confidenceCap    ┘
+    }
+
+    constructor(address authSigner) CallerAuth(authSigner) {}
 
     function _PMMSwap(address to, address pool, bytes memory moreInfo, uint256 payerOrigin) internal {
         (bytes memory orderInfo, bytes memory signature, uint256 signatureType, uint256 orderType) =
@@ -90,6 +128,8 @@ contract PMMAdapter {
             _executeV2Order(to, pool, orderInfo, signature, signatureType, payerOrigin);
         } else if (orderType == 3) {
             _executeV3Order(to, pool, orderInfo, signature, signatureType, payerOrigin);
+        } else if (orderType == 4) {
+            _executeV4Order(to, pool, orderInfo, signature, signatureType, payerOrigin);
         } else {
             revert("PMMAdapter: unsupported orderType");
         }
@@ -134,6 +174,7 @@ contract PMMAdapter {
     ) internal {
         IPMMProtocolV2.OrderRFQ memory order = abi.decode(orderInfo, (IPMMProtocolV2.OrderRFQ));
         uint256 flagsAndAmount;
+        uint256 fillMakerAmount;
         {
             uint256 amount = IERC20(order.takerAsset).balanceOf(address(this));
             if (amount > order.takerAmount) {
@@ -142,12 +183,26 @@ contract PMMAdapter {
             require(amount > 0, "Zero balance of PMM adapter");
             SafeERC20.safeApprove(IERC20(order.takerAsset), pool, amount);
             flagsAndAmount = (signatureType == uint256(SignatureType.EIP1271) ? 1 << 254 : 0) + amount;
+            fillMakerAmount =
+                amount == order.takerAmount ? order.makerAmount : amount * order.makerAmount / order.takerAmount;
         }
+
+        // V2 has no confidence (time-slippage) fields → confidence inputs are 0 (disabled).
+        MakerBalanceCheck memory balanceCheck = MakerBalanceCheck({
+            enabled: order.usePermit2 && order.permit2Signature.length > 0,
+            makerAsset: order.makerAsset,
+            maker: order.makerAddress,
+            makerAmount: fillMakerAmount,
+            confidenceT: 0,
+            confidenceWeight: 0,
+            confidenceCap: 0
+        });
 
         _call(
             pool,
             abi.encodeWithSelector(IPMMProtocolV2.fillOrderRFQTo.selector, order, signature, flagsAndAmount, to),
-            order.rfqId
+            order.rfqId,
+            balanceCheck
         );
 
         _handleRefund(order.takerAsset, payerOrigin);
@@ -163,6 +218,65 @@ contract PMMAdapter {
     ) internal {
         IPMMProtocolV3.OrderRFQ memory order = abi.decode(orderInfo, (IPMMProtocolV3.OrderRFQ));
         uint256 flagsAndAmount;
+        uint256 fillMakerAmount;
+        {
+            uint256 amount = IERC20(order.takerAsset).balanceOf(address(this));
+            if (amount > order.takerAmount) {
+                amount = order.takerAmount;
+            }
+            require(amount > 0, "Zero balance of PMM adapter");
+            SafeERC20.safeApprove(IERC20(order.takerAsset), pool, amount);
+            flagsAndAmount = (signatureType == uint256(SignatureType.EIP1271) ? 1 << 254 : 0) + amount;
+            fillMakerAmount =
+                amount == order.takerAmount ? order.makerAmount : amount * order.makerAmount / order.takerAmount;
+        }
+
+        // Pass the already-decoded confidence fields through so the fallback balance
+        // check never has to re-decode the whole order on the failure path.
+        MakerBalanceCheck memory balanceCheck = MakerBalanceCheck({
+            enabled: order.usePermit2 && order.permit2Signature.length > 0,
+            makerAsset: order.makerAsset,
+            maker: order.makerAddress,
+            makerAmount: fillMakerAmount,
+            confidenceT: order.confidenceT,
+            confidenceWeight: order.confidenceWeight,
+            confidenceCap: order.confidenceCap
+        });
+
+        // IPMMProtocol(pool).fillOrderRFQTo(order, signature, flagsAndAmount, to);
+        _call(
+            pool,
+            abi.encodeWithSelector(IPMMProtocolV3.fillOrderRFQTo.selector, order, signature, flagsAndAmount, to),
+            order.rfqId,
+            balanceCheck
+        );
+
+        _handleRefund(order.takerAsset, payerOrigin);
+    }
+
+    function _executeV4Order(
+        address to,
+        address pool,
+        bytes memory orderInfo,
+        bytes memory signature,
+        uint256 signatureType,
+        uint256 payerOrigin
+    ) internal {
+        (OrderRFQLib.OrderRFQ memory order, CallerAuthData memory adaptorAuth, CallerAuthData memory protocolAuth) =
+            abi.decode(orderInfo, (OrderRFQLib.OrderRFQ, CallerAuthData, CallerAuthData));
+
+        _verifyCallerAuth(
+            keccak256(abi.encode(order)),
+            adaptorAuth.allowedCallers,
+            adaptorAuth.nonce,
+            adaptorAuth.authSig
+        );
+
+        if (order.allowedSender == address(0) || order.allowedSender != _extractDexRouterCaller()) {
+            revert Errors.RFQ_BadSender(order.rfqId);
+        }
+
+        uint256 flagsAndAmount;
         {
             uint256 amount = IERC20(order.takerAsset).balanceOf(address(this));
             if (amount > order.takerAmount) {
@@ -173,10 +287,18 @@ contract PMMAdapter {
             flagsAndAmount = (signatureType == uint256(SignatureType.EIP1271) ? 1 << 254 : 0) + amount;
         }
 
-        // IPMMProtocol(pool).fillOrderRFQTo(order, signature, flagsAndAmount, to);
         _call(
             pool,
-            abi.encodeWithSelector(IPMMProtocolV3.fillOrderRFQTo.selector, order, signature, flagsAndAmount, to),
+            abi.encodeWithSelector(
+                IPMMProtocolV4.fillOrderRFQTo.selector,
+                order,
+                signature,
+                flagsAndAmount,
+                to,
+                protocolAuth.allowedCallers,
+                protocolAuth.nonce,
+                protocolAuth.authSig
+            ),
             order.rfqId
         );
 
@@ -185,8 +307,8 @@ contract PMMAdapter {
 
     function _handleRefund(address takerAsset, uint256 payerOrigin) internal {
         address _payerOrigin;
-        if ((payerOrigin & ORIGIN_PAYER) == ORIGIN_PAYER) {
-            _payerOrigin = address(uint160(uint256(payerOrigin) & ADDRESS_MASK));
+        if ((payerOrigin & MARKER_MASK) == ORIGIN_PAYER) {
+            _payerOrigin = address(uint160(uint256(payerOrigin) & _ADDRESS_MASK));
         }
         uint256 amountLeft = IERC20(takerAsset).balanceOf(address(this));
         if (amountLeft > 0 && _payerOrigin != address(0)) {
@@ -194,7 +316,7 @@ contract PMMAdapter {
         }
     }
 
-    function sellBase(address to, address pool, bytes memory moreInfo) external {
+    function sellBase(address to, address pool, bytes memory moreInfo) external nonReentrant {
         uint256 payerOrigin;
         assembly {
             let size := calldatasize()
@@ -203,7 +325,7 @@ contract PMMAdapter {
         _PMMSwap(to, pool, moreInfo, payerOrigin);
     }
 
-    function sellQuote(address to, address pool, bytes memory moreInfo) external {
+    function sellQuote(address to, address pool, bytes memory moreInfo) external nonReentrant {
         uint256 payerOrigin;
         assembly {
             let size := calldatasize()
@@ -212,7 +334,15 @@ contract PMMAdapter {
         _PMMSwap(to, pool, moreInfo, payerOrigin);
     }
 
+    /// @dev Legacy 3-arg entry point (V1 / non-Permit2). Forwards with the
+    /// maker-balance recheck disabled, so behavior is byte-for-byte identical to before.
     function _call(address target, bytes memory data, uint256 rfqId) internal {
+        _call(target, data, rfqId, MakerBalanceCheck(false, address(0), address(0), 0, 0, 0, 0));
+    }
+
+    function _call(address target, bytes memory data, uint256 rfqId, MakerBalanceCheck memory balanceCheck)
+        internal
+    {
         (bool success, bytes memory result) = target.call(data);
         if (success) {
             return;
@@ -291,8 +421,86 @@ contract PMMAdapter {
         } else if (selector == 0x1204d22d) {
             // RFQ_ConfidenceCapExceeded(uint256 rfqId);
             revert(string(abi.encodePacked("RFQ_ConfidenceCapExceeded ", rfqId.toString())));
+        } else if (selector == Errors.RFQ_BadSender.selector) {
+            // RFQ_BadSender(uint256 rfqId);
+            revert(string(abi.encodePacked("RFQ_BadSender ", rfqId.toString())));
+        } else if (selector == Errors.RFQ_InvalidRfqId.selector) {
+            // RFQ_InvalidRfqId(uint256 rfqId);
+            revert(string(abi.encodePacked("RFQ_InvalidRfqId ", rfqId.toString())));
+        } else if (selector == CallerAuth.AUTH_ZeroSigner.selector) {
+            revert(string(abi.encodePacked("AUTH_ZeroSigner ", rfqId.toString())));
+        } else if (selector == CallerAuth.AUTH_UntrustedCaller.selector) {
+            revert(string(abi.encodePacked("AUTH_UntrustedCaller ", rfqId.toString())));
+        } else if (selector == CallerAuth.AUTH_BadAuthSig.selector) {
+            revert(string(abi.encodePacked("AUTH_BadAuthSig ", rfqId.toString())));
+        } else if (selector == CallerAuth.AUTH_BadSigLen.selector) {
+            revert(string(abi.encodePacked("AUTH_BadSigLen ", rfqId.toString())));
+        } else if (selector == CallerAuth.AUTH_NonceUsed.selector) {
+            revert(string(abi.encodePacked("AUTH_NonceUsed ", rfqId.toString())));
+        } else if (selector == CallerAuth.AUTH_BadCallersLength.selector) {
+            revert(string(abi.encodePacked("AUTH_BadCallersLength ", rfqId.toString())));
         } else {
+            // Fallback: the underlying revert selector matched none of the known cases above.
+            // Only for enabled (Permit2) orders do we attempt a read-only maker
+            // balance recheck to attribute the failure to insufficient maker balance.
+            if (balanceCheck.enabled) {
+                (uint256 balance, bool ok) = _safeBalanceOf(balanceCheck.makerAsset, balanceCheck.maker);
+                // Stage 1: compare against the fill's makerAmount. If the maker can cover the
+                // payout, the failure is unrelated to balance → keep RFQ_Failed.
+                if (ok && balance < balanceCheck.makerAmount) {
+                    // Stage 2: below the payout → recompute the confidence-adjusted
+                    // (time-slippage) threshold and compare against that. V2 orders carry
+                    // zeroed confidence inputs, so the helper returns makerAmount unchanged.
+                    uint256 required = _getMakerAmountForBalanceCheck(
+                        balanceCheck.makerAmount,
+                        balanceCheck.confidenceT,
+                        balanceCheck.confidenceWeight,
+                        balanceCheck.confidenceCap
+                    );
+                    if (balance < required) {
+                        // Even at maximum slippage the maker cannot cover the payout →
+                        // attribute to a maker transfer failure (same string as selector 0xf4059071).
+                        revert(string(abi.encodePacked("RFQ_SafeTransferFromFailed ", rfqId.toString())));
+                    }
+                }
+                // balance >= required (or staticcall failed / short return) → safe degrade
+                // to the generic RFQ_Failed, never changing existing failure semantics.
+            }
             revert(string(abi.encodePacked("RFQ_Failed ", rfqId.toString())));
         }
+    }
+
+    /// @dev Read-only ERC20 balanceOf via staticcall. Returns `(0, false)` when the call
+    /// reverts or returns fewer than 32 bytes, so callers can safely degrade. No state
+    /// writes, no transfers, no new reentrancy surface.
+    function _safeBalanceOf(address token, address account) private view returns (uint256 bal, bool ok) {
+        (bool success, bytes memory data) =
+            token.staticcall(abi.encodeWithSelector(IERC20.balanceOf.selector, account));
+        if (success && data.length >= 32) {
+            return (abi.decode(data, (uint256)), true);
+        }
+        return (0, false);
+    }
+
+    // keep in sync with PmmProtocol.sol L263-279
+    /// @dev Mirrors PmmProtocol's confidence (time-slippage) reduction to derive the
+    /// effective maker payout used as the maker-balance threshold. Returns `makerAmount`
+    /// unchanged when slippage is disabled (confidenceT/Weight/Cap == 0) or out of bounds.
+    function _getMakerAmountForBalanceCheck(
+        uint256 makerAmount,
+        uint256 confidenceT,
+        uint256 confidenceWeight,
+        uint256 confidenceCap
+    ) private view returns (uint256) {
+        if (confidenceT != 0 && block.timestamp > confidenceT) {
+            if (confidenceWeight != 0 && confidenceCap != 0 && confidenceCap <= _CONFIDENCE_CAP_LIMIT) {
+                uint256 cutdownPercentageX6 = (block.timestamp - confidenceT) * confidenceWeight;
+                if (cutdownPercentageX6 > confidenceCap) {
+                    cutdownPercentageX6 = confidenceCap;
+                }
+                makerAmount = makerAmount - makerAmount * cutdownPercentageX6 / 1e6;
+            }
+        }
+        return makerAmount;
     }
 }

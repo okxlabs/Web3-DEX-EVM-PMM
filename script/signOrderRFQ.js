@@ -14,14 +14,14 @@ export async function signOrderRFQ({ privateKey, verifyingContract, chainId, ord
 
   const domain = {
     name: "OKX Labs PMM Protocol",
-    version: "1.1",
+    version: "1.2",
     chainId,
     verifyingContract,
   };
 
   // OrderRFQ typehash from Solidity - must match exactly
   const ORDER_RFQ_TYPEHASH = ethers.keccak256(ethers.toUtf8Bytes(
-    "OrderRFQ(uint256 rfqId,uint256 expiry,address makerAsset,address takerAsset,address makerAddress,uint256 makerAmount,uint256 takerAmount,bool usePermit2,uint256 confidenceT,uint256 confidenceWeight,uint256 confidenceCap,bytes permit2Signature,bytes32 permit2Witness,string permit2WitnessType)"
+    "OrderRFQ(uint256 rfqId,uint256 expiry,address makerAsset,address takerAsset,address makerAddress,uint256 makerAmount,uint256 takerAmount,bool usePermit2,address allowedSender,uint256 confidenceT,uint256 confidenceWeight,uint256 confidenceCap,bytes permit2Signature,bytes32 permit2Witness,string permit2WitnessType)"
   ));
 
   // Domain separator calculation matching Solidity
@@ -42,7 +42,7 @@ export async function signOrderRFQ({ privateKey, verifyingContract, chainId, ord
 
   // Struct hash calculation matching Solidity OrderRFQLib.hash()
   const structHash = ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(
-    ["bytes32", "uint256", "uint256", "address", "address", "address", "uint256", "uint256", "bool", "uint256", "uint256", "uint256", "bytes32", "bytes32", "bytes32"],
+    ["bytes32", "uint256", "uint256", "address", "address", "address", "uint256", "uint256", "bool", "address", "uint256", "uint256", "uint256", "bytes32", "bytes32", "bytes32"],
     [
       ORDER_RFQ_TYPEHASH,
       order.rfqId,
@@ -53,6 +53,7 @@ export async function signOrderRFQ({ privateKey, verifyingContract, chainId, ord
       order.makerAmount,
       order.takerAmount,
       order.usePermit2,
+      order.allowedSender,
       order.confidenceT,
       order.confidenceWeight,
       order.confidenceCap,
@@ -82,7 +83,6 @@ export async function signOrderRFQ({ privateKey, verifyingContract, chainId, ord
 export const EXAMPLE_WITNESS_TYPEHASH = ethers.keccak256(ethers.toUtf8Bytes("ExampleWitness(address user)"));
 export const WITNESS_TYPE_STRING = "ExampleWitness witness)ExampleWitness(address user)TokenPermissions(address token,uint256 amount)"
 export const TOKEN_PERMISSIONS_TYPEHASH = ethers.keccak256(ethers.toUtf8Bytes("TokenPermissions(address token,uint256 amount)"));
-export const CONSIDERATION_TYPEHASH = ethers.keccak256(ethers.toUtf8Bytes("Consideration(address token,uint256 amount,address counterparty)"));
 /**
  * Calculate permit2 witness hash from witness data
  *
@@ -95,14 +95,6 @@ export function calculateWitness(witnessData, witnessTypehash = EXAMPLE_WITNESS_
   const encodedWitness = ethers.AbiCoder.defaultAbiCoder().encode(
     ["bytes32", "address"],
     [witnessTypehash, witnessData.user]
-  );
-  return ethers.keccak256(encodedWitness);
-}
-
-export function calculateWitnessConsideration(consideration, witnessTypehash = CONSIDERATION_TYPEHASH) {
-  const encodedWitness = ethers.AbiCoder.defaultAbiCoder().encode(
-    ["bytes32", "address", "uint256", "address"],
-    [witnessTypehash, consideration.token, consideration.amount, consideration.counterparty]
   );
   return ethers.keccak256(encodedWitness);
 }

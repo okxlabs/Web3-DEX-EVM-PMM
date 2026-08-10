@@ -20,7 +20,13 @@ fs_permissions = [
 
 # RPC endpoints
 [rpc_endpoints]
-arbitrum = "https://arb1.arbitrum.io/rpc"
-arbitrum_sepolia = "https://sepolia-rollup.arbitrum.io/rpc"
+eth = "${ETH_RPC_URL}"
+bsc = "${BSC_RPC_URL}"
+base = "${BASE_RPC_URL}"
+arb = "${ARB_RPC_URL}"
+xlayer = "${XLAYER_RPC_URL}"
+
+[etherscan]
+xlayer = { key = "${OKLINK_API_KEY}", chain = 196, url = "https://www.oklink.com/api/v5/explorer/contract/verify-source-code-plugin/XLAYER" }
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
