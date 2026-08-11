@@ -74,7 +74,7 @@ contract PmmProtocolPermitWitnessFork is TestHelper {
         address MAKER_ADDRESS1 = deployer;
         address TAKER_ADDRESS1 = vm.addr(PK);
         // Create Order
-        OrderRFQLib.OrderRFQ memory order = createOrder(1357999, EXPIRY, usdc, usdt, MAKER_ADDRESS1, 100, 90, true);
+        OrderRFQLib.OrderRFQ memory order = createOrder(1357999, EXPIRY, usdc, usdt, MAKER_ADDRESS1, 100, 90, true, 0, 0, 0);
         emit log_named_uint("rfqId", order.rfqId);
         emit log_named_uint("expiry", order.expiry);
 
@@ -107,8 +107,12 @@ contract PmmProtocolPermitWitnessFork is TestHelper {
         emit log_named_bytes("orderSignature", orderSignature);
 
         // Execute
+        (address[] memory allowedCallers, uint256 authNonce, bytes memory authSig) =
+            _callerAuth(TAKER_ADDRESS1, address(pool), keccak256(abi.encode(order)));
         vm.startPrank(TAKER_ADDRESS1);
-        pool.fillOrderRFQTo(order, orderSignature, order.takerAmount, TAKER_ADDRESS1);
+        pool.fillOrderRFQTo(
+            order, orderSignature, order.takerAmount, TAKER_ADDRESS1, allowedCallers, authNonce, authSig
+        );
 
         // Verify Balances
         // assertEq(IERC20(usdt).balanceOf(MAKER_ADDRESS), 90);
@@ -169,7 +173,7 @@ contract PmmProtocolPermitWitnessFork is TestHelper {
         address MAKER_ADDRESS1 = deployer;
         address TAKER_ADDRESS1 = vm.addr(PK);
         // Create Order
-        OrderRFQLib.OrderRFQ memory order = createOrder(13579999, EXPIRY, usdc, usdt, MAKER_ADDRESS1, 100, 90, true);
+        OrderRFQLib.OrderRFQ memory order = createOrder(13579999, EXPIRY, usdc, usdt, MAKER_ADDRESS1, 100, 90, true, 0, 0, 0);
         emit log_named_uint("rfqId", order.rfqId);
         emit log_named_uint("expiry", order.expiry);
 
@@ -201,7 +205,11 @@ contract PmmProtocolPermitWitnessFork is TestHelper {
         bytes memory orderSignature = signOrder(order, pool.DOMAIN_SEPARATOR(), PK);
         emit log_named_bytes("orderSignature", orderSignature);
 
+        (address[] memory allowedCallers, uint256 authNonce, bytes memory authSig) =
+            _callerAuth(deployer, address(pool), keccak256(abi.encode(order)));
         vm.startBroadcast(deployer);
-        pool.fillOrderRFQTo(order, orderSignature, order.takerAmount, TAKER_ADDRESS1);
+        pool.fillOrderRFQTo(
+            order, orderSignature, order.takerAmount, TAKER_ADDRESS1, allowedCallers, authNonce, authSig
+        );
     }
 }

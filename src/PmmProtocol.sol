@@ -7,10 +7,11 @@ import "./helpers/AmountCalculator.sol";
 import "./interfaces/IWETH.sol";
 import "./libraries/Errors.sol";
 import "./libraries/SafeERC20.sol";
+import "./libraries/CallerAuth.sol";
 import "./OrderRFQLib.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
-contract PMMProtocol is EIP712, ReentrancyGuard {
+contract PMMProtocol is EIP712, CallerAuth, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using OrderRFQLib for OrderRFQLib.OrderRFQ;
 
@@ -21,6 +22,7 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
      * @param makerAsset Address of the maker asset
      * @param takerAsset Address of the taker asset
      * @param makerAddress Address of the maker
+     * @param allowedSender Caller the order is bound to (adapter-enforced); zero means unbound
      * @param expectedMakerAmount Expected amount of maker asset
      * @param expectedTakerAmount Expected amount of taker asset
      * @param filledMakerAmount Actual amount of maker asset that was transferred
@@ -36,6 +38,7 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
         address indexed makerAsset,
         address indexed takerAsset,
         address makerAddress,
+        address allowedSender,
         uint256 expectedMakerAmount,
         uint256 expectedTakerAmount,
         uint256 filledMakerAmount,
@@ -56,7 +59,7 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
     event OrderCancelledRFQ(uint256 indexed rfqId, address indexed maker);
 
     string private constant _NAME = "OKX Labs PMM Protocol";
-    string private constant _VERSION = "1.1";
+    string private constant _VERSION = "1.2";
 
     uint256 private constant _RAW_CALL_GAS_LIMIT = 5000;
     uint256 private constant _MAKER_AMOUNT_FLAG = 1 << 255;
@@ -72,7 +75,7 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
     IWETH private immutable _WETH;
     mapping(address => mapping(uint256 => uint256)) private _invalidator;
 
-    constructor(IWETH weth) EIP712(_NAME, _VERSION) {
+    constructor(IWETH weth, address authSigner) EIP712(_NAME, _VERSION) CallerAuth(authSigner) {
         _WETH = weth;
     }
 
@@ -97,68 +100,6 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
         return (bitMap & invalidatorBits) != 0;
     }
 
-    function fillOrderRFQ(OrderRFQLib.OrderRFQ memory order, bytes calldata signature, uint256 flagsAndAmount)
-        external
-        payable
-        returns (uint256, /* filledMakerAmount */ uint256, /* filledTakerAmount */ bytes32 /* orderHash */ )
-    {
-        return fillOrderRFQTo(order, signature, flagsAndAmount, msg.sender);
-    }
-
-    function fillOrderRFQCompact(OrderRFQLib.OrderRFQ memory order, bytes32 r, bytes32 vs, uint256 flagsAndAmount)
-        external
-        payable
-        nonReentrant
-        returns (uint256 filledMakerAmount, uint256 filledTakerAmount, bytes32 orderHash)
-    {
-        orderHash = order.hash(_domainSeparatorV4());
-        if (flagsAndAmount & _SIGNER_SMART_CONTRACT_HINT != 0) {
-            if (flagsAndAmount & _IS_VALID_SIGNATURE_65_BYTES != 0) {
-                if (!ECDSA.isValidSignature65(order.makerAddress, orderHash, r, vs)) {
-                    revert Errors.RFQ_BadSignature(order.rfqId);
-                }
-            } else {
-                if (!ECDSA.isValidSignature(order.makerAddress, orderHash, r, vs)) {
-                    revert Errors.RFQ_BadSignature(order.rfqId);
-                }
-            }
-        } else {
-            if (!ECDSA.recoverOrIsValidSignature(order.makerAddress, orderHash, r, vs)) {
-                revert Errors.RFQ_BadSignature(order.rfqId);
-            }
-        }
-
-        (filledMakerAmount, filledTakerAmount) = _fillOrderRFQTo(order, flagsAndAmount, msg.sender);
-        emit OrderFilledRFQ(
-            order.rfqId,
-            order.expiry,
-            order.makerAsset,
-            order.takerAsset,
-            order.makerAddress,
-            order.makerAmount,
-            order.takerAmount,
-            filledMakerAmount,
-            filledTakerAmount,
-            order.usePermit2,
-            order.permit2Signature,
-            order.permit2Witness,
-            order.permit2WitnessType
-        );
-    }
-
-    function fillOrderRFQToWithPermit(
-        OrderRFQLib.OrderRFQ memory order,
-        bytes calldata signature,
-        uint256 flagsAndAmount,
-        address target,
-        bytes calldata permit
-    ) external returns (uint256, /* filledMakerAmount */ uint256, /* filledTakerAmount */ bytes32 /* orderHash */ ) {
-        IERC20(order.takerAsset).safePermit(permit);
-        return fillOrderRFQTo(order, signature, flagsAndAmount, target);
-    }
-    // Anyone can fill the order, including via front-running.
-    // This is acceptable by design and does not cause any loss to the maker.
-
     // This function does not support deflationary or rebasing tokens.
     // The protocol assumes standard token behavior with exact transfer amounts,
     // which is valid for mainstream tokens typically used by market makers.
@@ -166,8 +107,19 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
         OrderRFQLib.OrderRFQ memory order,
         bytes calldata signature,
         uint256 flagsAndAmount,
-        address target
+        address target,
+        address[] calldata allowedCallers,
+        uint256 nonce,
+        bytes calldata authSig
     ) public payable nonReentrant returns (uint256 filledMakerAmount, uint256 filledTakerAmount, bytes32 orderHash) {
+        if (order.rfqId > type(uint64).max) {
+            revert Errors.RFQ_InvalidRfqId(order.rfqId);
+        }
+        if (allowedCallers.length != 1) {
+            revert AUTH_BadCallersLength();
+        }
+        _verifyCallerAuth(keccak256(abi.encode(order)), allowedCallers, nonce, authSig);
+
         orderHash = order.hash(_domainSeparatorV4());
         if (flagsAndAmount & _SIGNER_SMART_CONTRACT_HINT != 0) {
             if (flagsAndAmount & _IS_VALID_SIGNATURE_65_BYTES != 0 && signature.length != 65) {
@@ -188,6 +140,7 @@ contract PMMProtocol is EIP712, ReentrancyGuard {
             order.makerAsset,
             order.takerAsset,
             order.makerAddress,
+            order.allowedSender,
             order.makerAmount,
             order.takerAmount,
             filledMakerAmount,

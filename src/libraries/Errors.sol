@@ -16,4 +16,6 @@ library Errors {
     error RFQ_SettlementAmountTooSmall(uint256 rfqId);
     error RFQ_OrderAlreadyCancelledOrUsed(uint256 rfqId);
     error RFQ_ConfidenceCapExceeded(uint256 rfqId);
+    error RFQ_BadSender(uint256 rfqId);
+    error RFQ_InvalidRfqId(uint256 rfqId);
 }

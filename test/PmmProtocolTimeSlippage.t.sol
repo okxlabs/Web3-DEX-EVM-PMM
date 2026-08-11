@@ -38,7 +38,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
         makerToken = new MockERC20("MakerToken", "MAKER", 18);
         takerToken = new MockERC20("TakerToken", "TAKER", 18);
         weth = new MockWETH();
-        pmmProtocol = new PMMProtocol(IWETH(address(weth)));
+        pmmProtocol = new PMMProtocol(IWETH(address(weth)), AUTH_SIGNER_ADDRESS);
 
         maker = MAKER_ADDRESS;
         taker = TAKER_ADDRESS;
@@ -73,6 +73,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
             makerAmount: MAKER_AMOUNT,
             takerAmount: TAKER_AMOUNT,
             usePermit2: false,
+            allowedSender: address(0),
             confidenceT: confidenceT,
             confidenceWeight: confidenceWeight,
             confidenceCap: confidenceCap,
@@ -102,7 +103,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
 
         // fill before confidenceT — taker should receive full makerAmount
         vm.prank(taker);
-        (uint256 makerFilled, uint256 takerFilled,) = pmmProtocol.fillOrderRFQ(order, signature, 0);
+        (uint256 makerFilled, uint256 takerFilled,) = _fillAs(pmmProtocol, taker,order, signature, 0);
 
         assertEq(makerFilled, MAKER_AMOUNT, "makerFilled should equal full makerAmount");
         assertEq(takerFilled, TAKER_AMOUNT, "takerFilled should equal full takerAmount");
@@ -122,7 +123,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
         vm.warp(confidenceT);
 
         vm.prank(taker);
-        (uint256 makerFilled,,) = pmmProtocol.fillOrderRFQ(order, signature, 0);
+        (uint256 makerFilled,,) = _fillAs(pmmProtocol, taker,order, signature, 0);
 
         assertEq(makerFilled, MAKER_AMOUNT, "no slippage at exactly confidenceT");
     }
@@ -139,7 +140,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
         vm.warp(block.timestamp + 30 minutes);
 
         vm.prank(taker);
-        (uint256 makerFilled,,) = pmmProtocol.fillOrderRFQ(order, signature, 0);
+        (uint256 makerFilled,,) = _fillAs(pmmProtocol, taker,order, signature, 0);
 
         assertEq(makerFilled, MAKER_AMOUNT, "no slippage when confidenceT is 0");
     }
@@ -157,7 +158,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
         vm.warp(confidenceT + 10 minutes);
 
         vm.prank(taker);
-        (uint256 makerFilled,,) = pmmProtocol.fillOrderRFQ(order, signature, 0);
+        (uint256 makerFilled,,) = _fillAs(pmmProtocol, taker,order, signature, 0);
 
         assertEq(makerFilled, MAKER_AMOUNT, "no slippage when weight is 0");
     }
@@ -175,7 +176,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
         vm.warp(confidenceT + 10 minutes);
 
         vm.prank(taker);
-        (uint256 makerFilled,,) = pmmProtocol.fillOrderRFQ(order, signature, 0);
+        (uint256 makerFilled,,) = _fillAs(pmmProtocol, taker,order, signature, 0);
 
         assertEq(makerFilled, MAKER_AMOUNT, "no slippage when cap is 0");
     }
@@ -206,7 +207,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
         uint256 expectedMaker = MAKER_AMOUNT - MAKER_AMOUNT * 50_000 / 1e6;
 
         vm.prank(taker);
-        (uint256 makerFilled,,) = pmmProtocol.fillOrderRFQ(order, signature, 0);
+        (uint256 makerFilled,,) = _fillAs(pmmProtocol, taker,order, signature, 0);
 
         assertEq(makerFilled, expectedMaker, "makerFilled should reflect 5% confidence slippage");
     }
@@ -227,7 +228,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
 
         vm.warp(confidenceT + 50);
         vm.prank(taker);
-        (uint256 makerFilled1,,) = pmmProtocol.fillOrderRFQ(order1, sig1, 0);
+        (uint256 makerFilled1,,) = _fillAs(pmmProtocol, taker,order1, sig1, 0);
 
         uint256 expected1 = MAKER_AMOUNT - MAKER_AMOUNT * 25_000 / 1e6; // 97.5e18
         assertEq(makerFilled1, expected1, "2.5% slippage at t+50s");
@@ -239,7 +240,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
 
         vm.warp(confidenceT + 100);
         vm.prank(taker);
-        (uint256 makerFilled2,,) = pmmProtocol.fillOrderRFQ(order2, sig2, 0);
+        (uint256 makerFilled2,,) = _fillAs(pmmProtocol, taker,order2, sig2, 0);
 
         uint256 expected2 = MAKER_AMOUNT - MAKER_AMOUNT * 50_000 / 1e6; // 95e18
         assertEq(makerFilled2, expected2, "5% slippage at t+100s");
@@ -274,7 +275,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
         uint256 expectedMaker = partialMaker - partialMaker * 25_000 / 1e6;
 
         vm.prank(taker);
-        (uint256 makerFilled,,) = pmmProtocol.fillOrderRFQ(order, signature, flagsAndAmount);
+        (uint256 makerFilled,,) = _fillAs(pmmProtocol, taker,order, signature, flagsAndAmount);
 
         assertEq(makerFilled, expectedMaker, "slippage should apply to partial fill amount");
     }
@@ -297,7 +298,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
         uint256 takerBalanceBefore = takerToken.balanceOf(taker);
 
         vm.prank(taker);
-        (, uint256 takerFilled,) = pmmProtocol.fillOrderRFQ(order, signature, 0);
+        (, uint256 takerFilled,) = _fillAs(pmmProtocol, taker,order, signature, 0);
 
         // takerAmount should remain unchanged regardless of confidence slippage
         assertEq(takerFilled, TAKER_AMOUNT, "takerAmount must not be reduced by confidence");
@@ -332,7 +333,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
         uint256 expectedMakerFilled = MAKER_AMOUNT - MAKER_AMOUNT * 50_000 / 1e6; // 95e18
 
         vm.prank(taker);
-        pmmProtocol.fillOrderRFQ(order, signature, 0);
+        _fillAs(pmmProtocol, taker,order, signature, 0);
 
         // Maker sent expectedMakerFilled of makerToken
         assertEq(makerToken.balanceOf(maker), makerBalBefore - expectedMakerFilled, "maker makerToken balance");
@@ -368,7 +369,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
         uint256 expectedMaker = MAKER_AMOUNT - MAKER_AMOUNT * cap / 1e6; // 95e18
 
         vm.prank(taker);
-        (uint256 makerFilled,,) = pmmProtocol.fillOrderRFQ(order, signature, 0);
+        (uint256 makerFilled,,) = _fillAs(pmmProtocol, taker,order, signature, 0);
 
         assertEq(makerFilled, expectedMaker, "slippage should be capped at 5%");
     }
@@ -393,7 +394,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
         uint256 expectedMaker = MAKER_AMOUNT - MAKER_AMOUNT * cap / 1e6;
 
         vm.prank(taker);
-        (uint256 makerFilled,,) = pmmProtocol.fillOrderRFQ(order, signature, 0);
+        (uint256 makerFilled,,) = _fillAs(pmmProtocol, taker,order, signature, 0);
 
         assertEq(makerFilled, expectedMaker, "5% confidence cap should limit reduction to 5%");
     }
@@ -418,7 +419,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
         // After confidence 5%: actual makerFilled = 95e18
         // This succeeds because settle limit is checked BEFORE confidence
         vm.prank(taker);
-        (uint256 makerFilled,,) = pmmProtocol.fillOrderRFQ(order, signature, 0);
+        (uint256 makerFilled,,) = _fillAs(pmmProtocol, taker,order, signature, 0);
 
         uint256 expectedMaker = MAKER_AMOUNT - MAKER_AMOUNT * cap / 1e6; // 95e18
         assertEq(makerFilled, expectedMaker, "settle limit does not block post-confidence amount");
@@ -453,6 +454,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
             makerAmount: MAKER_AMOUNT,
             takerAmount: TAKER_AMOUNT,
             usePermit2: true,
+            allowedSender: address(0),
             confidenceT: confidenceT,
             confidenceWeight: weight,
             confidenceCap: cap,
@@ -491,7 +493,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
 
         // Execute fill
         vm.prank(taker);
-        (uint256 makerFilled, uint256 takerFilled,) = pmmProtocol.fillOrderRFQ(order, orderSignature, 0);
+        (uint256 makerFilled, uint256 takerFilled,) = _fillAs(pmmProtocol, taker,order, orderSignature, 0);
 
         // Verify slippage applied correctly through Permit2 witness path
         assertEq(makerFilled, expectedMaker, "makerFilled should reflect 5% slippage via permit2 witness");
@@ -525,7 +527,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
 
         vm.prank(taker);
         vm.expectRevert(abi.encodeWithSelector(Errors.RFQ_ConfidenceCapExceeded.selector, 16));
-        pmmProtocol.fillOrderRFQ(order, signature, 0);
+        _fillAs(pmmProtocol, taker,order, signature, 0);
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -543,7 +545,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
         vm.warp(block.timestamp + 30 minutes);
 
         vm.prank(taker);
-        (uint256 makerFilled,,) = pmmProtocol.fillOrderRFQ(order, signature, 0);
+        (uint256 makerFilled,,) = _fillAs(pmmProtocol, taker,order, signature, 0);
 
         // slippage never activates, so full makerAmount is transferred
         assertEq(makerFilled, MAKER_AMOUNT, "no revert and full amount when confidenceT is 0");
@@ -565,7 +567,7 @@ contract PmmProtocolTimeSlippageTest is TestHelper {
         vm.warp(confidenceT + 100);
 
         vm.prank(taker);
-        (uint256 makerFilled,,) = pmmProtocol.fillOrderRFQ(order, signature, 0);
+        (uint256 makerFilled,,) = _fillAs(pmmProtocol, taker,order, signature, 0);
 
         // slippage never activates (weight == 0), so full makerAmount is transferred
         assertEq(makerFilled, MAKER_AMOUNT, "no revert and full amount when weight is 0");

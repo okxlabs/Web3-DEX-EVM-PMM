@@ -39,6 +39,10 @@ contract MockMarketMaker is Test {
             makerAmount: amount,
             takerAmount: amount,
             usePermit2: true,
+            allowedSender: allowedSender,
+            confidenceT: 0,
+            confidenceWeight: 0,
+            confidenceCap: 0,
             permit2Signature: "",
             permit2Witness: bytes32(0),
             permit2WitnessType: ""
